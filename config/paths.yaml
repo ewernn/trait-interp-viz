@@ -1,0 +1,110 @@
+# config/paths.yaml
+# Single source of truth for all repo paths.
+# All templates are complete - no cross-references.
+#
+# Variables:
+#   {experiment} - experiment name
+#   {trait} - full trait path (e.g., cognitive_state/context)
+#   {method} - extraction method (probe, mean_diff, ica, gradient)
+#   {layer} - layer number
+#   {prompt_set} - prompt set name (e.g., single_trait, multi_trait, dynamic, adversarial, baseline, real_world)
+#   {prompt_id} - prompt ID within a set (integer)
+#   {format} - file format (json is standard; csv kept for backwards compatibility)
+
+# =============================================================================
+# EXPERIMENT STRUCTURE
+# =============================================================================
+
+experiments:
+  base: "experiments/{experiment}"
+  list: "experiments"
+
+# =============================================================================
+# EXTRACTION (training-time data)
+# =============================================================================
+
+extraction:
+  base: "experiments/{experiment}/extraction"
+  trait: "experiments/{experiment}/extraction/{trait}"
+  vectors: "experiments/{experiment}/extraction/{trait}/vectors"
+  activations: "experiments/{experiment}/extraction/{trait}/activations"
+  val_activations: "experiments/{experiment}/extraction/{trait}/val_activations"
+  responses: "experiments/{experiment}/extraction/{trait}/responses"
+  val_responses: "experiments/{experiment}/extraction/{trait}/val_responses"
+
+# =============================================================================
+# INFERENCE (evaluation-time data)
+# =============================================================================
+
+inference:
+  base: "experiments/{experiment}/inference"
+
+  # Centralized prompt sets (JSON files in inference/prompts/)
+  # Each file contains: {name, description, prompts: [{id, text, note}]}
+  prompts_dir: "inference/prompts"
+  prompt_set_file: "inference/prompts/{prompt_set}.json"
+
+  # Raw activations (trait-independent, binary .pt)
+  # Captured once per prompt, reused across all trait projections
+  raw: "experiments/{experiment}/inference/raw"
+  raw_residual: "experiments/{experiment}/inference/raw/residual/{prompt_set}"
+  raw_internals: "experiments/{experiment}/inference/raw/internals/{prompt_set}"
+
+  # Per-trait analysis results (JSON for visualization)
+  trait: "experiments/{experiment}/inference/{trait}"
+  residual_stream: "experiments/{experiment}/inference/{trait}/residual_stream/{prompt_set}"
+
+# =============================================================================
+# EXTRACTION EVALUATION (aggregate quality metrics for extracted vectors)
+# =============================================================================
+
+extraction_eval:
+  evaluation: "experiments/{experiment}/extraction/extraction_evaluation.json"
+  cross_trait_matrix: "experiments/{experiment}/extraction/cross_trait_matrix.json"
+
+# =============================================================================
+# FILE PATTERNS (combine with directory paths)
+# =============================================================================
+
+patterns:
+  # Vectors
+  vector: "{method}_layer{layer}.pt"
+  vector_metadata: "{method}_layer{layer}_metadata.json"
+
+  # Activations
+  all_layers: "all_layers.pt"
+  metadata: "metadata.json"
+  val_pos: "val_pos_layer{layer}.pt"
+  val_neg: "val_neg_layer{layer}.pt"
+
+  # Responses
+  pos_responses: "pos.{format}"
+  neg_responses: "neg.{format}"
+  val_pos_prompts: "val_positive.txt"
+  val_neg_prompts: "val_negative.txt"
+  pos_prompts: "positive.txt"
+  neg_prompts: "negative.txt"
+
+  # Inference - raw activations
+  raw_residual_pt: "{prompt_id}.pt"
+  raw_internals_pt: "{prompt_id}_L{layer}.pt"
+
+  # Inference - per-trait results
+  residual_stream_json: "{prompt_id}.json"
+
+  # Trait definition
+  trait_definition: "trait_definition.txt"
+
+# =============================================================================
+# GLOBAL DIRECTORIES
+# =============================================================================
+
+global:
+  traitlens: "traitlens"
+  analysis: "analysis"
+  extraction_scripts: "extraction"
+  inference_scripts: "inference"
+  docs: "docs"
+  visualization: "visualization"
+  config: "config"
+  utils: "utils"

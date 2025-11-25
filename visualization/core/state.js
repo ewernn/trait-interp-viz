@@ -1,0 +1,959 @@
+// Global State Management for Trait Interpretation Visualization
+
+// State
+const state = {
+    experiments: [],
+    currentExperiment: null,
+    experimentData: null,
+    currentView: 'data-explorer',
+    selectedTraits: new Set(),
+    // Prompt state structure
+    currentPromptSet: null,      // e.g., 'single_trait'
+    currentPromptId: null,       // e.g., 1
+    availablePromptSets: {},     // { 'single_trait': [{id, text, note}, ...], ... }
+    promptsWithData: {},         // { 'single_trait': [1, 2, 3], ... } - which prompts have inference data
+    // Token selection for per-token analysis
+    currentTokenIndex: 0,        // Currently selected token index (0-based, absolute across prompt+response)
+    // Cached inference context (prompt/response text for current selection)
+    inferenceContextCache: null  // { promptSet, promptId, promptText, responseText, promptTokens, responseTokens, allTokens, nPromptTokens }
+};
+
+// Display names for better interpretability
+const DISPLAY_NAMES = {
+    // Legacy names (from old structure)
+    'uncertainty_calibration': 'Confidence',
+    'instruction_boundary': 'Literalness',
+    'commitment_strength': 'Assertiveness',
+    'retrieval_construction': 'Retrieval',
+    'convergent_divergent': 'Thinking Style',
+    'abstract_concrete': 'Abstraction Level',
+    'temporal_focus': 'Temporal Orientation',
+    'cognitive_load': 'Complexity',
+    'context_adherence': 'Context Following',
+    'emotional_valence': 'Emotional Tone',
+    'paranoia_trust': 'Trust Level',
+    'power_dynamics': 'Authority Tone',
+    'serial_parallel': 'Processing Style',
+    'local_global': 'Focus Scope',
+
+    // New categorized trait names
+    'abstractness': 'Abstractness',
+    'authority': 'Authority',
+    'compliance': 'Compliance',
+    'confidence': 'Confidence',
+    'context': 'Context Adherence',
+    'curiosity': 'Curiosity',
+    'defensiveness': 'Defensiveness',
+    'divergence': 'Divergent Thinking',
+    'enthusiasm': 'Enthusiasm',
+    'evaluation_awareness': 'Evaluation Awareness',
+    'formality': 'Formality',
+    'futurism': 'Future Focus',
+    'literalness': 'Literalness',
+    'positivity': 'Positivity',
+    'refusal': 'Refusal',
+    'retrieval': 'Retrieval',
+    'scope': 'Scope',
+    'sequentiality': 'Sequential Processing',
+    'sycophancy': 'Sycophancy',
+    'trust': 'Trust'
+};
+
+// Helper Functions
+function getDisplayName(traitName) {
+    // Handle category/trait format (e.g., "cognitive/context")
+    let baseName = traitName;
+    let method = '';
+    let category = '';
+
+    // Extract category if present
+    if (traitName.includes('/')) {
+        const parts = traitName.split('/');
+        category = parts[0];
+        baseName = parts[1];
+    }
+
+    // Extract method suffix
+    if (baseName.endsWith('_natural')) {
+        baseName = baseName.replace('_natural', '');
+        method = ' (Natural)';
+    }
+
+    // Get display name (without category prefix in the lookup)
+    let displayBase = DISPLAY_NAMES[baseName] ||
+        baseName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+    return displayBase + method;
+}
+
+function getFilteredTraits() {
+    if (!state.experimentData || !state.experimentData.traits) return [];
+    return state.experimentData.traits.filter(trait => state.selectedTraits.has(trait.name));
+}
+
+// Theme Management
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+}
+
+function toggleTheme() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+    updateThemeIcon(newTheme);
+}
+
+function updateThemeIcon(theme) {
+    const themeToggle = document.getElementById('theme-toggle');
+    themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+    themeToggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+}
+
+// Transformer Sidebar Management
+function toggleTransformerSidebar() {
+    const sidebar = document.getElementById('transformer-sidebar');
+    const toggle = document.getElementById('transformer-toggle');
+
+    if (!sidebar) return;  // Sidebar is commented out in HTML
+
+    if (sidebar.classList.contains('hidden')) {
+        sidebar.classList.remove('hidden');
+        toggle.textContent = '◀';
+        toggle.title = 'Hide architecture';
+        localStorage.setItem('transformerSidebarVisible', 'true');
+    } else {
+        sidebar.classList.add('hidden');
+        toggle.textContent = '▶';
+        toggle.title = 'Show architecture';
+        localStorage.setItem('transformerSidebarVisible', 'false');
+    }
+}
+
+function initTransformerSidebar() {
+    const visible = localStorage.getItem('transformerSidebarVisible');
+    if (visible === 'false') {
+        toggleTransformerSidebar();
+    }
+
+    document.getElementById('transformer-toggle')?.addEventListener('click', toggleTransformerSidebar);
+}
+
+// Info Tooltip
+function toggleInfo() {
+    const tooltip = document.getElementById('info-tooltip');
+    tooltip?.classList.toggle('show');
+}
+
+// Trait Selection
+function populateTraitCheckboxes() {
+    const container = document.getElementById('trait-checkboxes');
+    if (!container) return;
+
+    container.innerHTML = '';
+    state.selectedTraits.clear();  // Clear before repopulating
+
+    if (!state.experimentData || !state.experimentData.traits) return;
+
+    // Deduplicate traits to prevent double-rendering from race conditions
+    const uniqueTraits = state.experimentData.traits.filter((trait, index, self) =>
+        index === self.findIndex((t) => t.name === trait.name)
+    );
+
+    uniqueTraits.forEach(trait => {
+        const checkbox = document.createElement('div');
+        checkbox.className = 'trait-checkbox';
+        checkbox.innerHTML = `
+            <input type="checkbox" id="trait-${trait.name}" value="${trait.name}" checked>
+            <label for="trait-${trait.name}">${getDisplayName(trait.name)}</label>
+        `;
+        container.appendChild(checkbox);
+
+        const input = checkbox.querySelector('input');
+        input.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                state.selectedTraits.add(trait.name);
+            } else {
+                state.selectedTraits.delete(trait.name);
+            }
+            updateSelectedCount();
+            if (window.renderView) window.renderView();
+        });
+
+        state.selectedTraits.add(trait.name);
+    });
+
+    updateSelectedCount();
+}
+
+function updateSelectedCount() {
+    const countElem = document.getElementById('selected-count');
+    if (countElem) {
+        countElem.textContent = state.selectedTraits.size;
+    }
+}
+
+function toggleAllTraits() {
+    const checkboxes = document.querySelectorAll('#trait-checkboxes input[type="checkbox"]');
+    const allSelected = state.selectedTraits.size === checkboxes.length;
+
+    checkboxes.forEach(cb => {
+        cb.checked = !allSelected;
+        if (!allSelected) {
+            state.selectedTraits.add(cb.value);
+        } else {
+            state.selectedTraits.delete(cb.value);
+        }
+    });
+
+    const btn = document.getElementById('select-all-btn');
+    if (btn) {
+        btn.textContent = allSelected ? 'Select All' : 'Deselect All';
+    }
+    updateSelectedCount();
+    if (window.renderView) window.renderView();
+}
+
+// Views that use the inference context (Inference Analysis views)
+const INFERENCE_VIEWS = ['all-layers', 'per-token-activation', 'layer-deep-dive', 'token-explorer', 'analysis-gallery'];
+
+/**
+ * Render the inference context panel (prompt picker + prompt/response display).
+ * Shows only for inference views, hidden for trait development views.
+ */
+async function renderInferenceContext() {
+    const container = document.getElementById('inference-context');
+    if (!container) return;
+
+    const isInferenceView = INFERENCE_VIEWS.includes(state.currentView);
+
+    if (!isInferenceView) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+
+    // Check if we have prompt data
+    const hasAnyData = Object.values(state.promptsWithData).some(ids => ids.length > 0);
+    if (!hasAnyData) {
+        container.innerHTML = `
+            <div class="inference-context-inner">
+                <div class="no-prompts">No inference data available for this experiment.</div>
+            </div>
+        `;
+        return;
+    }
+
+    // Build prompt picker HTML
+    let promptSetOptions = '';
+    for (const [setName, promptIds] of Object.entries(state.promptsWithData)) {
+        if (promptIds.length === 0) continue;
+        const selected = setName === state.currentPromptSet ? 'selected' : '';
+        promptSetOptions += `<option value="${setName}" ${selected}>${setName.replace(/_/g, ' ')}</option>`;
+    }
+
+    const currentSetPromptIds = state.promptsWithData[state.currentPromptSet] || [];
+    let promptBoxes = '';
+    currentSetPromptIds.forEach(id => {
+        const isActive = id === state.currentPromptId ? 'active' : '';
+        const promptDef = (state.availablePromptSets[state.currentPromptSet] || []).find(p => p.id === id);
+        const tooltip = promptDef ? promptDef.text.substring(0, 100) + (promptDef.text.length > 100 ? '...' : '') : '';
+        promptBoxes += `<div class="prompt-box ${isActive}" data-prompt-set="${state.currentPromptSet}" data-prompt-id="${id}" title="${tooltip}">${id}</div>`;
+    });
+
+    // Get prompt text and note from definitions
+    const promptDef = (state.availablePromptSets[state.currentPromptSet] || []).find(p => p.id === state.currentPromptId);
+    const promptText = promptDef ? promptDef.text : 'Loading...';
+    const promptNote = promptDef && promptDef.note ? escapeHtml(promptDef.note) : '';
+
+    // Check cache for response data
+    let responseText = '';
+    let tokenInfo = '';
+    let tokenSliderHtml = '';
+    let tokenList = [];
+
+    if (state.inferenceContextCache &&
+        state.inferenceContextCache.promptSet === state.currentPromptSet &&
+        state.inferenceContextCache.promptId === state.currentPromptId) {
+        // Use cached data
+        responseText = state.inferenceContextCache.responseText;
+        tokenList = state.inferenceContextCache.allTokens || [];
+        const nPrompt = state.inferenceContextCache.promptTokens || 0;
+        const nResponse = state.inferenceContextCache.responseTokens || 0;
+        const nPromptTokens = state.inferenceContextCache.nPromptTokens || 0;
+        tokenInfo = `${nPrompt} prompt + ${nResponse} response = ${nPrompt + nResponse} tokens`;
+
+        // Build token slider if we have tokens
+        if (tokenList.length > 0) {
+            const maxIdx = tokenList.length - 1;
+            const currentIdx = Math.min(state.currentTokenIndex, maxIdx);
+            const currentToken = tokenList[currentIdx] || '';
+            // Escape token for display (show special chars)
+            const displayToken = currentToken
+                .replace(/\n/g, '↵')
+                .replace(/\t/g, '→')
+                .replace(/ /g, '·');
+            // Show which phase we're in
+            const phase = currentIdx < nPromptTokens ? 'prompt' : 'response';
+
+            tokenSliderHtml = `
+                <div class="token-slider-container">
+                    <span class="token-slider-label">Token:</span>
+                    <input type="range" class="token-slider" id="token-slider"
+                           min="0" max="${maxIdx}" value="${currentIdx}">
+                    <span class="token-index">${currentIdx}</span>
+                    <span class="token-phase">[${phase}]</span>
+                    <span class="token-display">${escapeHtml(displayToken)}</span>
+                </div>
+            `;
+        }
+    } else {
+        // Need to fetch - show loading state and fetch async
+        responseText = 'Loading response...';
+        tokenInfo = '';
+        fetchInferenceContextData(); // Fire and forget, will re-render when done
+    }
+
+    container.innerHTML = `
+        <div class="inference-context-inner">
+            <div class="inference-context-picker">
+                <select class="prompt-set-select" id="prompt-set-select">${promptSetOptions}</select>
+                <div class="prompt-box-container">${promptBoxes}</div>
+                ${promptNote ? `<div class="prompt-note-tag">${promptNote}</div>` : ''}
+            </div>
+            <div class="inference-context-content">
+                <div class="inference-prompt">
+                    <span class="inference-label">Prompt:</span>
+                    <span class="inference-text">${buildHighlightedText(tokenList, state.currentTokenIndex, 0, state.inferenceContextCache?.nPromptTokens || 0, 300)}</span>
+                </div>
+                <div class="inference-response">
+                    <span class="inference-label">Response:</span>
+                    <span class="inference-text">${buildHighlightedText(tokenList, state.currentTokenIndex, state.inferenceContextCache?.nPromptTokens || 0, tokenList.length, 300)}</span>
+                </div>
+                ${tokenInfo ? `<div class="inference-tokens">${tokenInfo}</div>` : ''}
+                ${tokenSliderHtml}
+            </div>
+        </div>
+    `;
+
+    // Re-attach event listeners for the prompt picker
+    setupInferenceContextListeners();
+}
+
+/**
+ * Fetch prompt/response data from first available trait and cache it.
+ */
+async function fetchInferenceContextData() {
+    if (!state.currentPromptSet || !state.currentPromptId) return;
+    if (!state.experimentData || !state.experimentData.traits || state.experimentData.traits.length === 0) return;
+
+    const firstTrait = state.experimentData.traits[0];
+
+    try {
+        const url = window.paths.residualStreamData(firstTrait, state.currentPromptSet, state.currentPromptId);
+        const response = await fetch(url);
+        if (!response.ok) return;
+
+        const data = await response.json();
+
+        const promptTokenList = data.prompt?.tokens || [];
+        const responseTokenList = data.response?.tokens || [];
+        const allTokens = [...promptTokenList, ...responseTokenList];
+
+        state.inferenceContextCache = {
+            promptSet: state.currentPromptSet,
+            promptId: state.currentPromptId,
+            promptText: data.prompt?.text || '',
+            responseText: data.response?.text || '',
+            promptTokens: promptTokenList.length,  // Use actual array length
+            responseTokens: responseTokenList.length,  // Use actual array length
+            allTokens: allTokens,
+            nPromptTokens: promptTokenList.length
+        };
+
+        // Reset token index when loading new prompt (clamp to valid range)
+        const maxIdx = Math.max(0, allTokens.length - 1);
+        state.currentTokenIndex = Math.min(state.currentTokenIndex, maxIdx);
+
+        // Re-render with the fetched data
+        renderInferenceContext();
+    } catch (e) {
+        console.warn('Failed to fetch inference context data:', e);
+    }
+}
+
+/**
+ * Setup event listeners for the inference context prompt picker.
+ */
+function setupInferenceContextListeners() {
+    const container = document.getElementById('inference-context');
+    if (!container) return;
+
+    // Prompt set dropdown
+    const setSelect = container.querySelector('#prompt-set-select');
+    if (setSelect) {
+        setSelect.addEventListener('change', (e) => {
+            const newSet = e.target.value;
+            if (state.currentPromptSet !== newSet) {
+                state.currentPromptSet = newSet;
+                const availableIds = state.promptsWithData[newSet] || [];
+                state.currentPromptId = availableIds[0] || null;
+                state.inferenceContextCache = null; // Clear cache
+                renderInferenceContext();
+                if (window.renderView) window.renderView();
+            }
+        });
+    }
+
+    // Prompt ID boxes
+    container.querySelectorAll('.prompt-box').forEach(box => {
+        box.addEventListener('click', () => {
+            const promptId = parseInt(box.dataset.promptId);
+            if (state.currentPromptId !== promptId && !isNaN(promptId)) {
+                state.currentPromptId = promptId;
+                state.inferenceContextCache = null; // Clear cache
+                renderInferenceContext();
+                if (window.renderView) window.renderView();
+            }
+        });
+    });
+
+    // Token slider
+    const tokenSlider = container.querySelector('#token-slider');
+    if (tokenSlider) {
+        tokenSlider.addEventListener('input', (e) => {
+            const newIdx = parseInt(e.target.value);
+            if (state.currentTokenIndex !== newIdx && !isNaN(newIdx)) {
+                state.currentTokenIndex = newIdx;
+                // Update display without full re-render
+                const tokenList = state.inferenceContextCache?.allTokens || [];
+                const nPromptTokens = state.inferenceContextCache?.nPromptTokens || 0;
+                const currentToken = tokenList[newIdx] || '';
+                const displayToken = currentToken
+                    .replace(/\n/g, '↵')
+                    .replace(/\t/g, '→')
+                    .replace(/ /g, '·');
+                const phase = newIdx < nPromptTokens ? 'prompt' : 'response';
+                container.querySelector('.token-index').textContent = newIdx;
+                container.querySelector('.token-phase').textContent = `[${phase}]`;
+                container.querySelector('.token-display').textContent = displayToken;
+                // Update highlighted prompt text
+                const promptTextSpan = container.querySelector('.inference-prompt .inference-text');
+                if (promptTextSpan) {
+                    promptTextSpan.innerHTML = buildHighlightedText(tokenList, newIdx, 0, nPromptTokens, 300);
+                }
+                // Update highlighted response text
+                const responseTextSpan = container.querySelector('.inference-response .inference-text');
+                if (responseTextSpan) {
+                    responseTextSpan.innerHTML = buildHighlightedText(tokenList, newIdx, nPromptTokens, tokenList.length, 300);
+                }
+                // Update plot highlights without full re-render
+                updatePlotTokenHighlights(newIdx, nPromptTokens);
+            }
+        });
+    }
+}
+
+/**
+ * Update token highlight shapes on existing Plotly plots (no re-render).
+ */
+function updatePlotTokenHighlights(tokenIdx, nPromptTokens) {
+    const startIdx = 1;  // BOS is skipped in all plots
+    const highlightX = tokenIdx - startIdx;
+    const separatorX = (nPromptTokens - startIdx) - 0.5;
+
+    // Get colors from CSS
+    const primaryColor = getCssVar('--primary-color', '#a09f6c');
+    const textSecondary = getCssVar('--text-secondary', '#a4a4a4');
+    const separatorColor = `${primaryColor}80`;
+    const highlightColor = `${primaryColor}33`;
+
+    if (state.currentView === 'all-layers') {
+        // Update all trait heatmaps
+        const filteredTraits = getFilteredTraits();
+        for (const trait of filteredTraits) {
+            const traitId = trait.name.replace(/\//g, '-');
+            const plotDiv = document.getElementById(`trajectory-heatmap-${traitId}`);
+            if (plotDiv && plotDiv.data) {
+                Plotly.relayout(plotDiv, {
+                    shapes: [
+                        { type: 'line', xref: 'x', yref: 'paper', x0: separatorX, x1: separatorX, y0: 0, y1: 1, line: { color: separatorColor, width: 2, dash: 'dash' } },
+                        { type: 'rect', xref: 'x', yref: 'paper', x0: highlightX - 0.5, x1: highlightX + 0.5, y0: 0, y1: 1, fillcolor: highlightColor, line: { width: 0 } }
+                    ]
+                });
+            }
+        }
+    } else if (state.currentView === 'per-token-activation') {
+        // Update combined activation plot
+        const plotDiv = document.getElementById('combined-activation-plot');
+        if (plotDiv && plotDiv.data) {
+            Plotly.relayout(plotDiv, {
+                shapes: [
+                    { type: 'line', x0: separatorX, x1: separatorX, y0: 0, y1: 1, yref: 'paper', line: { color: textSecondary, width: 2, dash: 'dash' } },
+                    { type: 'line', x0: highlightX, x1: highlightX, y0: 0, y1: 1, yref: 'paper', line: { color: primaryColor, width: 2 } }
+                ]
+            });
+        }
+    } else if (state.currentView === 'token-explorer') {
+        // Token Explorer needs full re-render with new token data (data is cached)
+        if (window.renderTokenExplorer) {
+            window.renderTokenExplorer();
+        }
+    }
+}
+
+/**
+ * Simple HTML escaping for user content.
+ */
+function escapeHtml(text) {
+    if (!text) return '';
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/**
+ * Build text with the current token highlighted and markdown rendered.
+ * @param tokenList - full list of all tokens
+ * @param currentIdx - absolute index of current token
+ * @param startIdx - start of range to display (inclusive)
+ * @param endIdx - end of range to display (exclusive)
+ * @param maxChars - max characters to show before truncating
+ */
+function buildHighlightedText(tokenList, currentIdx, startIdx, endIdx, maxChars) {
+    if (!tokenList || tokenList.length === 0) {
+        return 'Loading...';
+    }
+
+    let result = '';
+    let charCount = 0;
+    let truncated = false;
+
+    for (let i = startIdx; i < endIdx; i++) {
+        const token = tokenList[i];
+        if (!token) continue;
+        const escaped = escapeHtml(token);
+
+        // Check if we'd exceed max chars
+        if (charCount + token.length > maxChars) {
+            truncated = true;
+            break;
+        }
+
+        if (i === currentIdx) {
+            result += `<span class="token-highlight">${escaped}</span>`;
+        } else {
+            result += escaped;
+        }
+        charCount += token.length;
+    }
+
+    if (truncated) {
+        result += '...';
+    }
+
+    // Apply markdown formatting (bold, italic) - works across tokens
+    // Use a placeholder to protect highlight spans from markdown parsing
+    const placeholder = '\x00HIGHLIGHT\x00';
+    result = result.replace(/<span class="token-highlight">(.*?)<\/span>/g, (match, content) => {
+        return placeholder + content + placeholder;
+    });
+    result = markdownToHtml(result);
+    result = result.replace(new RegExp(placeholder + '(.*?)' + placeholder, 'g'), '<span class="token-highlight">$1</span>');
+
+    return result || '(empty)';
+}
+
+// Navigation
+function setupNavigation() {
+    const navItems = document.querySelectorAll('.nav-item');
+    navItems.forEach(item => {
+        item.addEventListener('click', () => {
+            navItems.forEach(n => n.classList.remove('active'));
+            item.classList.add('active');
+            if (item.dataset.view) {
+                state.currentView = item.dataset.view;
+                setTabInURL(item.dataset.view);  // NEW: Sync URL
+                updatePageTitle();
+                renderInferenceContext();
+                if (window.renderView) window.renderView();
+            }
+        });
+    });
+}
+
+function updatePageTitle() {
+    const titles = {
+        'data-explorer': 'Data Explorer',
+        'overview': 'Overview',
+        'vectors': 'Vector Analysis',
+        'trait-correlation': 'Trait Correlation',
+        'validation': 'Validation Results',
+        'monitoring': 'All Layers',
+        'prompt-activation': 'Per-Token Activation',
+        'layer-dive': 'Layer Deep Dive'
+    };
+    const titleElem = document.getElementById('page-title');
+    if (titleElem) {
+        titleElem.textContent = titles[state.currentView] || 'Data Explorer';
+    }
+}
+
+// Experiment Loading
+async function loadExperiments() {
+    try {
+        const response = await fetch('/api/experiments');
+        const data = await response.json();
+        state.experiments = data.experiments || [];
+
+        const list = document.getElementById('experiment-list');
+        if (!list) return;
+
+        list.innerHTML = state.experiments.map((exp, idx) => {
+            const displayName = exp.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            const isActive = idx === 0 ? 'active' : '';
+            return `
+                <div class="nav-item ${isActive}" data-experiment="${exp}">
+                    <span class="icon">🔬</span>
+                    <span>${displayName}</span>
+                </div>
+            `;
+        }).join('');
+
+        list.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                list.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+                state.currentExperiment = item.dataset.experiment;
+                loadExperimentData(state.currentExperiment);
+            });
+        });
+
+        if (state.experiments.length > 0) {
+            state.currentExperiment = state.experiments[0];
+            await loadExperimentData(state.currentExperiment);
+        }
+    } catch (error) {
+        console.error('Error loading experiments:', error);
+        showError('Failed to load experiments');
+    }
+}
+
+async function loadExperimentData(experimentName) {
+    const contentArea = document.getElementById('content-area');
+    if (contentArea) {
+        contentArea.innerHTML = '<div class="loading">Loading experiment data...</div>';
+    }
+
+    try {
+        state.experimentData = {
+            name: experimentName,
+            traits: [],
+            readme: null
+        };
+        
+        // Correctly use the global path builder
+        window.paths.setExperiment(experimentName);
+
+        // Try to load README
+        try {
+            const readmePath = `experiments/${experimentName}/README.md`;
+            const readmeResponse = await fetch(readmePath);
+            if (readmeResponse.ok) {
+                state.experimentData.readme = await readmeResponse.text();
+            }
+        } catch (e) {
+            console.log('No README found for experiment.');
+        }
+
+        // Fetch traits from API
+        const traitsResponse = await fetch(`/api/experiments/${experimentName}/traits`);
+        if (!traitsResponse.ok) {
+            throw new Error(`Failed to fetch traits: ${traitsResponse.statusText}`);
+        }
+        const traitsData = await traitsResponse.json();
+        const traitNames = traitsData.traits || [];
+
+        // Load each trait with metadata
+        for (const traitName of traitNames) {
+            const traitObj = { name: traitName };
+
+            // Detect response format
+            const responseFormat = await window.detectResponseFormat(window.paths, traitObj);
+
+            if (!responseFormat) {
+                console.warn(`No responses for ${traitName}`);
+            }
+
+            // Load metadata
+            let metadata = null;
+            try {
+                const metadataRes = await fetch(window.paths.activationsMetadata(traitObj));
+                if (metadataRes.ok) {
+                    metadata = await metadataRes.json();
+                }
+            } catch (e) {
+                console.warn(`No metadata for ${traitName}`);
+            }
+            
+            const method = traitName.endsWith('_natural') ? 'natural' : 'instruction';
+            let baseName = traitName.replace('_natural', '');
+            if (baseName.includes('/')) {
+                baseName = baseName.split('/')[1];
+            }
+
+            const hasVectors = await window.hasVectors(window.paths, traitObj);
+            
+            state.experimentData.traits.push({
+                name: traitName,
+                baseName: baseName,
+                method: method,
+                responseFormat: responseFormat,
+                hasResponses: !!responseFormat,
+                hasVectors: hasVectors,
+                metadata: metadata
+            });
+        }
+
+        // Update experiment badge
+        const badge = document.getElementById('experiment-badge');
+        if (badge) {
+            badge.textContent = experimentName.replace(/_/g, ' ');
+        }
+
+        console.log(`Loaded ${state.experimentData.traits.length} traits for ${experimentName}:`);
+        state.experimentData.traits.forEach((t, idx) => {
+            console.log(`  [${idx}] ${t.name}`);
+        });
+
+        populateTraitCheckboxes();
+        discoverAvailablePrompts();
+        if (window.renderView) window.renderView();
+
+    } catch (error) {
+        console.error('Error loading experiment data:', error);
+        showError(`Failed to load experiment: ${experimentName}`);
+    }
+}
+
+async function discoverAvailablePrompts() {
+    state.availablePromptSets = {};
+    state.promptsWithData = {};
+
+    if (!state.currentExperiment) {
+        populatePromptSelector();
+        return;
+    }
+
+    // Single API call to get all prompt sets with their available IDs
+    try {
+        const response = await fetch(`/api/experiments/${state.currentExperiment}/inference/prompt-sets`);
+        if (!response.ok) {
+            console.warn('Failed to fetch prompt sets');
+            populatePromptSelector();
+            return;
+        }
+
+        const data = await response.json();
+        const promptSets = data.prompt_sets || [];
+
+        for (const ps of promptSets) {
+            // Store prompt definitions
+            state.availablePromptSets[ps.name] = ps.prompts || [];
+            // Store which IDs have data (discovered from raw/residual/)
+            state.promptsWithData[ps.name] = ps.available_ids || [];
+        }
+    } catch (e) {
+        console.error('Error fetching prompt sets:', e);
+    }
+
+    // Set default selection - prefer sets with "single" in name, then alphabetical
+    state.currentPromptSet = null;
+    state.currentPromptId = null;
+
+    const setsWithData = Object.entries(state.promptsWithData)
+        .filter(([_, ids]) => ids.length > 0)
+        .sort(([a], [b]) => {
+            // Prioritize sets with "single" in the name
+            const aHasSingle = a.includes('single');
+            const bHasSingle = b.includes('single');
+            if (aHasSingle && !bHasSingle) return -1;
+            if (!aHasSingle && bHasSingle) return 1;
+            // Otherwise alphabetical
+            return a.localeCompare(b);
+        });
+
+    if (setsWithData.length > 0) {
+        const [setName, promptIds] = setsWithData[0];
+        state.currentPromptSet = setName;
+        state.currentPromptId = promptIds[0];
+    }
+
+    console.log('Discovered prompt sets:', Object.keys(state.availablePromptSets));
+    console.log('Prompts with data:', state.promptsWithData);
+    console.log('Current selection:', state.currentPromptSet, state.currentPromptId);
+
+    renderInferenceContext();
+}
+
+// Event Listeners Setup
+function setupEventListeners() {
+    // Theme toggle
+    document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+
+    // Info button
+    document.getElementById('info-btn')?.addEventListener('click', toggleInfo);
+
+    // Select all traits button
+    document.getElementById('select-all-btn')?.addEventListener('click', toggleAllTraits);
+
+    // Close info tooltip when clicking outside
+    document.addEventListener('click', (e) => {
+        const tooltip = document.getElementById('info-tooltip');
+        const infoBtn = document.getElementById('info-btn');
+        if (tooltip && !tooltip.contains(e.target) && e.target !== infoBtn) {
+            tooltip.classList.remove('show');
+        }
+    });
+}
+
+// Utility Functions
+function showError(message) {
+    const contentArea = document.getElementById('content-area');
+    if (contentArea) {
+        contentArea.innerHTML = `<div class="error">${message}</div>`;
+    }
+}
+
+// Plotly Layout Helper - reads colors from CSS variables
+function getPlotlyLayout(baseLayout = {}) {
+    const styles = getComputedStyle(document.documentElement);
+    const textPrimary = styles.getPropertyValue('--text-primary').trim() || '#e0e0e0';
+    const bgTertiary = styles.getPropertyValue('--bg-tertiary').trim() || '#3a3a3a';
+
+    return {
+        ...baseLayout,
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        font: {
+            ...baseLayout.font,
+            color: textPrimary
+        },
+        xaxis: {
+            ...baseLayout.xaxis,
+            color: textPrimary,
+            gridcolor: bgTertiary,
+            zerolinecolor: bgTertiary
+        },
+        yaxis: {
+            ...baseLayout.yaxis,
+            color: textPrimary,
+            gridcolor: bgTertiary,
+            zerolinecolor: bgTertiary
+        }
+    };
+}
+
+// Standard colorscale for trait heatmaps (asymmetric: vibrant red + muted blue)
+// Optimized for [0, +1] data where positive values matter more
+const ASYMB_COLORSCALE = [
+    [0, '#5a6a8a'],
+    [0.25, '#98a4b0'],
+    [0.5, '#c8c8c8'],
+    [0.75, '#d47c67'],
+    [1, '#b40426']
+];
+
+// Get CSS variable value helper
+function getCssVar(name, fallback = '') {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+// URL-based tab routing functions
+function getTabFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('tab') || 'overview';
+}
+
+function setTabInURL(tabName) {
+    const url = new URL(window.location);
+    url.searchParams.set('tab', tabName);
+    window.history.pushState({ tab: tabName }, '', url);
+}
+
+function initFromURL() {
+    const tab = getTabFromURL();
+    state.currentView = tab;
+
+    // Update active nav item
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    const activeNav = document.querySelector(`.nav-item[data-view="${tab}"]`);
+    if (activeNav) activeNav.classList.add('active');
+}
+
+// Handle browser back/forward buttons
+window.addEventListener('popstate', () => {
+    initFromURL();
+    renderInferenceContext();
+    if (window.renderView) window.renderView();
+});
+
+// Simple Markdown to HTML converter
+function markdownToHtml(text) {
+    if (!text) return '';
+    return text
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+        .replace(/\*(.*?)\*/g, '<em>$1</em>');           // Italic
+}
+
+// Global math rendering utility (KaTeX)
+function renderMath(element) {
+    if (typeof renderMathInElement === 'undefined') {
+        console.warn('KaTeX not loaded - math rendering skipped');
+        return;
+    }
+
+    try {
+        renderMathInElement(element, {
+            delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false}
+            ],
+            throwOnError: false
+        });
+    } catch (error) {
+        console.error('Math rendering error:', error);
+    }
+}
+
+// Initialize Application
+async function init() {
+    await window.paths.load();
+    initTheme();
+    initTransformerSidebar();
+    setupNavigation();
+    await loadExperiments();
+    setupEventListeners();
+
+    // NEW: Read tab from URL and render
+    initFromURL();
+    renderInferenceContext();
+    if (window.renderView) window.renderView();
+}
+
+// Export state and functions
+window.state = state;
+window.getDisplayName = getDisplayName;
+window.getFilteredTraits = getFilteredTraits;
+window.getPlotlyLayout = getPlotlyLayout;
+window.ASYMB_COLORSCALE = ASYMB_COLORSCALE;
+window.getCssVar = getCssVar;
+window.showError = showError;
+window.initApp = init;
+window.markdownToHtml = markdownToHtml;
+window.renderMath = renderMath;
