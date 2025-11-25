@@ -44,6 +44,10 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             request_parts = args[0].split(' ')
             path = request_parts[1] if len(request_parts) > 1 else args[0]
 
+            # Suppress expected 404s (traits without inference data, optional files)
+            if '/residual_stream/' in path or '/README.md' in path or '/favicon.ico' in path:
+                return  # Expected - not all traits have inference data, READMEs optional
+
             # Clarify common issues
             if '/visualization/experiments/' in path:
                 self.log_error("❌ 404: %s (Should not have /visualization/ prefix - bug in frontend path construction)", path)
@@ -122,8 +126,8 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_inference_projection(exp_name, category, trait, prompt_set, prompt_id)
                 return
 
-            # Serve SPA at root
-            if self.path == '/' or self.path == '/index.html':
+            # Serve SPA at root (including with query params like /?tab=...)
+            if self.path == '/' or self.path == '/index.html' or self.path.startswith('/?'):
                 self.path = '/visualization/index.html'
 
             # Backwards compatibility redirects
@@ -135,7 +139,7 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             elif self.path == '/visualization/' or self.path == '/visualization/index.html':
                 self.send_response(301)
-                self.send_header('Location', '/?tab=data-explorer')
+                self.send_header('Location', '/?tab=overview')
                 self.end_headers()
                 return
 
@@ -379,8 +383,9 @@ def main():
     print(f"""Starting server on http://localhost:{PORT}
 
 Available at:
-  • http://localhost:{PORT}/              (Overview - landing page)
-  • http://localhost:{PORT}/visualization/index.html  (Dashboard)
+  • http://localhost:{PORT}/                    (Dashboard - defaults to Overview tab)
+  • http://localhost:{PORT}/?tab=data-explorer  (Data Explorer)
+  • http://localhost:{PORT}/?tab=overview       (Overview documentation)
 
 Press Ctrl+C to stop the server.
 """)
