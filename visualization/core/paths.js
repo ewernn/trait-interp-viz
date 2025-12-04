@@ -266,47 +266,6 @@ class PathBuilder {
     }
 
     /**
-     * BACKWARDS COMPATIBILITY: Map old prompt index to new (promptSet, promptId) tuple.
-     * Old structure used indices 0-50 across all prompts.
-     * New structure uses separate sets with IDs 1-N within each set.
-     * @param {number} oldIndex - Old-style prompt index (0-based)
-     * @returns {{promptSet: string, promptId: number}}
-     */
-    _mapOldPromptIndex(oldIndex) {
-        // Mapping: 0-9 = single_trait (1-10), 10-19 = multi_trait (1-10), etc.
-        const ranges = [
-            { set: 'single_trait', count: 10 },
-            { set: 'multi_trait', count: 10 },
-            { set: 'dynamic', count: 8 },
-            { set: 'adversarial', count: 8 },
-            { set: 'baseline', count: 5 },
-            { set: 'real_world', count: 10 }
-        ];
-
-        let offset = 0;
-        for (const { set, count } of ranges) {
-            if (oldIndex < offset + count) {
-                return { promptSet: set, promptId: oldIndex - offset + 1 };
-            }
-            offset += count;
-        }
-        // Fallback to single_trait
-        return { promptSet: 'single_trait', promptId: 1 };
-    }
-
-    /**
-     * BACKWARDS COMPATIBILITY: Get all-layers data using old index-based API.
-     * @deprecated Use residualStreamData(trait, promptSet, promptId) instead
-     * @param {string|Object} trait - Trait name or object
-     * @param {number} promptNum - Old-style prompt number (0-based index)
-     * @returns {string}
-     */
-    allLayersData(trait, promptNum) {
-        const { promptSet, promptId } = this._mapOldPromptIndex(promptNum);
-        return this.residualStreamData(trait, promptSet, promptId);
-    }
-
-    /**
      * Get extraction evaluation results path.
      * @returns {string}
      */
@@ -357,6 +316,86 @@ class PathBuilder {
      */
     promptsDir() {
         return `/${this.get('inference.prompts_dir')}`;
+    }
+
+    // =========================================================================
+    // Analysis paths
+    // =========================================================================
+
+    /**
+     * Get analysis base directory.
+     * @returns {string}
+     */
+    analysisBase() {
+        return `/${this.get('analysis.base')}`;
+    }
+
+    /**
+     * Get analysis index file.
+     * @returns {string}
+     */
+    analysisIndex() {
+        return `/${this.get('analysis.index')}`;
+    }
+
+    /**
+     * Get per-token analysis data path.
+     * @param {string} promptSet - Prompt set name
+     * @param {number} promptId - Prompt ID within the set
+     * @returns {string}
+     */
+    analysisPerToken(promptSet, promptId) {
+        const dir = this.get('analysis.per_token', { prompt_set: promptSet });
+        const file = this.get('patterns.per_token_json', { prompt_id: promptId });
+        return `/${dir}/${file}`;
+    }
+
+    /**
+     * Get analysis category directory.
+     * @param {string} category - Analysis category name
+     * @returns {string}
+     */
+    analysisCategory(category) {
+        return `/${this.get('analysis.category', { category })}`;
+    }
+
+    /**
+     * Get analysis file for a specific prompt.
+     * @param {string} category - Analysis category name
+     * @param {number} promptId - Prompt ID
+     * @param {string} ext - File extension ('png' or 'json')
+     * @returns {string}
+     */
+    analysisCategoryPrompt(category, promptId, ext = 'png') {
+        const dir = this.get('analysis.category', { category });
+        const pattern = ext === 'png' ? 'patterns.analysis_prompt_png' : 'patterns.analysis_prompt_json';
+        const file = this.get(pattern, { prompt_id: promptId });
+        return `/${dir}/${file}`;
+    }
+
+    /**
+     * Get analysis file with custom filename.
+     * @param {string} category - Analysis category name
+     * @param {string} filename - Filename without extension
+     * @param {string} ext - File extension ('png' or 'json')
+     * @returns {string}
+     */
+    analysisCategoryNamed(category, filename, ext = 'png') {
+        const dir = this.get('analysis.category', { category });
+        const pattern = ext === 'png' ? 'patterns.analysis_named_png' : 'patterns.analysis_named_json';
+        const file = this.get(pattern, { filename });
+        return `/${dir}/${file}`;
+    }
+
+    /**
+     * Get extraction file path (generic).
+     * @param {string} traitName - Trait name (e.g., 'cognitive_state/context')
+     * @param {string} subpath - Subpath within trait directory
+     * @returns {string}
+     */
+    extractionFile(traitName, subpath) {
+        const basePath = this.get('extraction.trait', { trait: traitName });
+        return `/${basePath}/${subpath}`;
     }
 }
 

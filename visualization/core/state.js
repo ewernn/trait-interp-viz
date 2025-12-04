@@ -15,7 +15,9 @@ const state = {
     // Token selection for per-token analysis
     currentTokenIndex: 0,        // Currently selected token index (0-based, absolute across prompt+response)
     // Cached inference context (prompt/response text for current selection)
-    inferenceContextCache: null  // { promptSet, promptId, promptText, responseText, promptTokens, responseTokens, allTokens, nPromptTokens }
+    promptPickerCache: null,  // { promptSet, promptId, promptText, responseText, promptTokens, responseTokens, allTokens, nPromptTokens }
+    // Layer Deep Dive settings
+    hideAttentionSink: true  // Hide first token (attention sink) in heatmaps
 };
 
 // Display names for better interpretability
@@ -141,11 +143,6 @@ function initTransformerSidebar() {
     document.getElementById('transformer-toggle')?.addEventListener('click', toggleTransformerSidebar);
 }
 
-// Info Tooltip
-function toggleInfo() {
-    const tooltip = document.getElementById('info-tooltip');
-    tooltip?.classList.toggle('show');
-}
 
 // Trait Selection
 function populateTraitCheckboxes() {
@@ -153,39 +150,134 @@ function populateTraitCheckboxes() {
     if (!container) return;
 
     container.innerHTML = '';
-    state.selectedTraits.clear();  // Clear before repopulating
+    state.selectedTraits.clear();
 
     if (!state.experimentData || !state.experimentData.traits) return;
 
-    // Deduplicate traits to prevent double-rendering from race conditions
+    // Deduplicate traits
     const uniqueTraits = state.experimentData.traits.filter((trait, index, self) =>
         index === self.findIndex((t) => t.name === trait.name)
     );
 
+    // Group traits by category
+    const categories = {};
     uniqueTraits.forEach(trait => {
-        const checkbox = document.createElement('div');
-        checkbox.className = 'trait-checkbox';
-        checkbox.innerHTML = `
-            <input type="checkbox" id="trait-${trait.name}" value="${trait.name}" checked>
-            <label for="trait-${trait.name}">${getDisplayName(trait.name)}</label>
-        `;
-        container.appendChild(checkbox);
+        const parts = trait.name.split('/');
+        const category = parts.length > 1 ? parts[0] : 'uncategorized';
+        if (!categories[category]) categories[category] = [];
+        categories[category].push(trait);
+    });
 
-        const input = checkbox.querySelector('input');
-        input.addEventListener('change', (e) => {
-            if (e.target.checked) {
+    // Check if og_10 exists for default selection
+    const hasOg10 = 'og_10' in categories;
+
+    // Sort categories: og_10 first, then alphabetical
+    const sortedCategories = Object.keys(categories).sort((a, b) => {
+        if (a === 'og_10') return -1;
+        if (b === 'og_10') return 1;
+        return a.localeCompare(b);
+    });
+
+    sortedCategories.forEach(category => {
+        const traits = categories[category];
+        const isDefaultSelected = hasOg10 ? category === 'og_10' : true;
+
+        // Create category container
+        const categoryDiv = document.createElement('div');
+        categoryDiv.className = 'trait-category';
+        categoryDiv.dataset.category = category;
+
+        // Category header
+        const header = document.createElement('div');
+        header.className = 'trait-category-header';
+        header.innerHTML = `
+            <span class="category-arrow">▼</span>
+            <input type="checkbox" class="category-checkbox" ${isDefaultSelected ? 'checked' : ''}>
+            <span class="category-name">${category.replace(/_/g, ' ')}</span>
+            <span class="category-count">(${isDefaultSelected ? traits.length : 0}/${traits.length})</span>
+        `;
+        categoryDiv.appendChild(header);
+
+        // Traits container
+        const traitsDiv = document.createElement('div');
+        traitsDiv.className = 'trait-category-items';
+
+        traits.forEach(trait => {
+            const checkbox = document.createElement('div');
+            checkbox.className = 'trait-checkbox';
+            checkbox.innerHTML = `
+                <input type="checkbox" id="trait-${trait.name}" value="${trait.name}" ${isDefaultSelected ? 'checked' : ''}>
+                <label for="trait-${trait.name}">${getDisplayName(trait.name)}</label>
+            `;
+            traitsDiv.appendChild(checkbox);
+
+            const input = checkbox.querySelector('input');
+            input.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    state.selectedTraits.add(trait.name);
+                } else {
+                    state.selectedTraits.delete(trait.name);
+                }
+                updateCategoryCheckbox(categoryDiv);
+                updateSelectedCount();
+                if (window.renderView) window.renderView();
+            });
+
+            if (isDefaultSelected) {
                 state.selectedTraits.add(trait.name);
-            } else {
-                state.selectedTraits.delete(trait.name);
             }
+        });
+
+        categoryDiv.appendChild(traitsDiv);
+        container.appendChild(categoryDiv);
+
+        // Category header click handlers
+        const arrow = header.querySelector('.category-arrow');
+        const categoryCheckbox = header.querySelector('.category-checkbox');
+
+        // Arrow toggles collapse
+        arrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isCollapsed = categoryDiv.classList.toggle('collapsed');
+            arrow.textContent = isCollapsed ? '▶' : '▼';
+        });
+
+        // Category checkbox toggles all traits in category
+        categoryCheckbox.addEventListener('change', (e) => {
+            const checked = e.target.checked;
+            traitsDiv.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.checked = checked;
+                if (checked) {
+                    state.selectedTraits.add(cb.value);
+                } else {
+                    state.selectedTraits.delete(cb.value);
+                }
+            });
+            updateCategoryCount(categoryDiv);
             updateSelectedCount();
             if (window.renderView) window.renderView();
         });
 
-        state.selectedTraits.add(trait.name);
+        updateCategoryCount(categoryDiv);
     });
 
     updateSelectedCount();
+}
+
+function updateCategoryCheckbox(categoryDiv) {
+    const checkboxes = categoryDiv.querySelectorAll('.trait-category-items input[type="checkbox"]');
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    const categoryCheckbox = categoryDiv.querySelector('.category-checkbox');
+    categoryCheckbox.checked = checkedCount === checkboxes.length;
+    categoryCheckbox.indeterminate = checkedCount > 0 && checkedCount < checkboxes.length;
+    updateCategoryCount(categoryDiv);
+}
+
+function updateCategoryCount(categoryDiv) {
+    const checkboxes = categoryDiv.querySelectorAll('.trait-category-items input[type="checkbox"]');
+    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    const countSpan = categoryDiv.querySelector('.category-count');
+    countSpan.textContent = `(${checkedCount}/${checkboxes.length})`;
 }
 
 function updateSelectedCount() {
@@ -196,10 +288,10 @@ function updateSelectedCount() {
 }
 
 function toggleAllTraits() {
-    const checkboxes = document.querySelectorAll('#trait-checkboxes input[type="checkbox"]');
-    const allSelected = state.selectedTraits.size === checkboxes.length;
+    const traitCheckboxes = document.querySelectorAll('.trait-category-items input[type="checkbox"]');
+    const allSelected = state.selectedTraits.size === traitCheckboxes.length;
 
-    checkboxes.forEach(cb => {
+    traitCheckboxes.forEach(cb => {
         cb.checked = !allSelected;
         if (!allSelected) {
             state.selectedTraits.add(cb.value);
@@ -208,301 +300,17 @@ function toggleAllTraits() {
         }
     });
 
+    // Update all category checkboxes
+    document.querySelectorAll('.trait-category').forEach(categoryDiv => {
+        updateCategoryCheckbox(categoryDiv);
+    });
+
     const btn = document.getElementById('select-all-btn');
     if (btn) {
         btn.textContent = allSelected ? 'Select All' : 'Deselect All';
     }
     updateSelectedCount();
     if (window.renderView) window.renderView();
-}
-
-// Views that use the inference context (Inference Analysis views)
-const INFERENCE_VIEWS = ['all-layers', 'per-token-activation', 'layer-deep-dive', 'token-explorer', 'analysis-gallery'];
-
-/**
- * Render the inference context panel (prompt picker + prompt/response display).
- * Shows only for inference views, hidden for trait development views.
- */
-async function renderInferenceContext() {
-    const container = document.getElementById('inference-context');
-    if (!container) return;
-
-    const isInferenceView = INFERENCE_VIEWS.includes(state.currentView);
-
-    if (!isInferenceView) {
-        container.style.display = 'none';
-        return;
-    }
-
-    container.style.display = 'block';
-
-    // Check if we have prompt data
-    const hasAnyData = Object.values(state.promptsWithData).some(ids => ids.length > 0);
-    if (!hasAnyData) {
-        container.innerHTML = `
-            <div class="inference-context-inner">
-                <div class="no-prompts">No inference data available for this experiment.</div>
-            </div>
-        `;
-        return;
-    }
-
-    // Build prompt picker HTML
-    let promptSetOptions = '';
-    for (const [setName, promptIds] of Object.entries(state.promptsWithData)) {
-        if (promptIds.length === 0) continue;
-        const selected = setName === state.currentPromptSet ? 'selected' : '';
-        promptSetOptions += `<option value="${setName}" ${selected}>${setName.replace(/_/g, ' ')}</option>`;
-    }
-
-    const currentSetPromptIds = state.promptsWithData[state.currentPromptSet] || [];
-    let promptBoxes = '';
-    currentSetPromptIds.forEach(id => {
-        const isActive = id === state.currentPromptId ? 'active' : '';
-        const promptDef = (state.availablePromptSets[state.currentPromptSet] || []).find(p => p.id === id);
-        const tooltip = promptDef ? promptDef.text.substring(0, 100) + (promptDef.text.length > 100 ? '...' : '') : '';
-        promptBoxes += `<div class="prompt-box ${isActive}" data-prompt-set="${state.currentPromptSet}" data-prompt-id="${id}" title="${tooltip}">${id}</div>`;
-    });
-
-    // Get prompt text and note from definitions
-    const promptDef = (state.availablePromptSets[state.currentPromptSet] || []).find(p => p.id === state.currentPromptId);
-    const promptText = promptDef ? promptDef.text : 'Loading...';
-    const promptNote = promptDef && promptDef.note ? escapeHtml(promptDef.note) : '';
-
-    // Check cache for response data
-    let responseText = '';
-    let tokenInfo = '';
-    let tokenSliderHtml = '';
-    let tokenList = [];
-
-    if (state.inferenceContextCache &&
-        state.inferenceContextCache.promptSet === state.currentPromptSet &&
-        state.inferenceContextCache.promptId === state.currentPromptId) {
-        // Use cached data
-        responseText = state.inferenceContextCache.responseText;
-        tokenList = state.inferenceContextCache.allTokens || [];
-        const nPrompt = state.inferenceContextCache.promptTokens || 0;
-        const nResponse = state.inferenceContextCache.responseTokens || 0;
-        const nPromptTokens = state.inferenceContextCache.nPromptTokens || 0;
-        tokenInfo = `${nPrompt} prompt + ${nResponse} response = ${nPrompt + nResponse} tokens`;
-
-        // Build token slider if we have tokens
-        if (tokenList.length > 0) {
-            const maxIdx = tokenList.length - 1;
-            const currentIdx = Math.min(state.currentTokenIndex, maxIdx);
-            const currentToken = tokenList[currentIdx] || '';
-            // Escape token for display (show special chars)
-            const displayToken = currentToken
-                .replace(/\n/g, '↵')
-                .replace(/\t/g, '→')
-                .replace(/ /g, '·');
-            // Show which phase we're in
-            const phase = currentIdx < nPromptTokens ? 'prompt' : 'response';
-
-            tokenSliderHtml = `
-                <div class="token-slider-container">
-                    <span class="token-slider-label">Token:</span>
-                    <input type="range" class="token-slider" id="token-slider"
-                           min="0" max="${maxIdx}" value="${currentIdx}">
-                    <span class="token-index">${currentIdx}</span>
-                    <span class="token-phase">[${phase}]</span>
-                    <span class="token-display">${escapeHtml(displayToken)}</span>
-                </div>
-            `;
-        }
-    } else {
-        // Need to fetch - show loading state and fetch async
-        responseText = 'Loading response...';
-        tokenInfo = '';
-        fetchInferenceContextData(); // Fire and forget, will re-render when done
-    }
-
-    container.innerHTML = `
-        <div class="inference-context-inner">
-            <div class="inference-context-picker">
-                <select class="prompt-set-select" id="prompt-set-select">${promptSetOptions}</select>
-                <div class="prompt-box-container">${promptBoxes}</div>
-                ${promptNote ? `<div class="prompt-note-tag">${promptNote}</div>` : ''}
-            </div>
-            <div class="inference-context-content">
-                <div class="inference-prompt">
-                    <span class="inference-label">Prompt:</span>
-                    <span class="inference-text">${buildHighlightedText(tokenList, state.currentTokenIndex, 0, state.inferenceContextCache?.nPromptTokens || 0, 300)}</span>
-                </div>
-                <div class="inference-response">
-                    <span class="inference-label">Response:</span>
-                    <span class="inference-text">${buildHighlightedText(tokenList, state.currentTokenIndex, state.inferenceContextCache?.nPromptTokens || 0, tokenList.length, 300)}</span>
-                </div>
-                ${tokenInfo ? `<div class="inference-tokens">${tokenInfo}</div>` : ''}
-                ${tokenSliderHtml}
-            </div>
-        </div>
-    `;
-
-    // Re-attach event listeners for the prompt picker
-    setupInferenceContextListeners();
-}
-
-/**
- * Fetch prompt/response data from first available trait and cache it.
- */
-async function fetchInferenceContextData() {
-    if (!state.currentPromptSet || !state.currentPromptId) return;
-    if (!state.experimentData || !state.experimentData.traits || state.experimentData.traits.length === 0) return;
-
-    const firstTrait = state.experimentData.traits[0];
-
-    try {
-        const url = window.paths.residualStreamData(firstTrait, state.currentPromptSet, state.currentPromptId);
-        const response = await fetch(url);
-        if (!response.ok) return;
-
-        const data = await response.json();
-
-        const promptTokenList = data.prompt?.tokens || [];
-        const responseTokenList = data.response?.tokens || [];
-        const allTokens = [...promptTokenList, ...responseTokenList];
-
-        state.inferenceContextCache = {
-            promptSet: state.currentPromptSet,
-            promptId: state.currentPromptId,
-            promptText: data.prompt?.text || '',
-            responseText: data.response?.text || '',
-            promptTokens: promptTokenList.length,  // Use actual array length
-            responseTokens: responseTokenList.length,  // Use actual array length
-            allTokens: allTokens,
-            nPromptTokens: promptTokenList.length
-        };
-
-        // Reset token index when loading new prompt (clamp to valid range)
-        const maxIdx = Math.max(0, allTokens.length - 1);
-        state.currentTokenIndex = Math.min(state.currentTokenIndex, maxIdx);
-
-        // Re-render with the fetched data
-        renderInferenceContext();
-    } catch (e) {
-        console.warn('Failed to fetch inference context data:', e);
-    }
-}
-
-/**
- * Setup event listeners for the inference context prompt picker.
- */
-function setupInferenceContextListeners() {
-    const container = document.getElementById('inference-context');
-    if (!container) return;
-
-    // Prompt set dropdown
-    const setSelect = container.querySelector('#prompt-set-select');
-    if (setSelect) {
-        setSelect.addEventListener('change', (e) => {
-            const newSet = e.target.value;
-            if (state.currentPromptSet !== newSet) {
-                state.currentPromptSet = newSet;
-                const availableIds = state.promptsWithData[newSet] || [];
-                state.currentPromptId = availableIds[0] || null;
-                state.inferenceContextCache = null; // Clear cache
-                renderInferenceContext();
-                if (window.renderView) window.renderView();
-            }
-        });
-    }
-
-    // Prompt ID boxes
-    container.querySelectorAll('.prompt-box').forEach(box => {
-        box.addEventListener('click', () => {
-            const promptId = parseInt(box.dataset.promptId);
-            if (state.currentPromptId !== promptId && !isNaN(promptId)) {
-                state.currentPromptId = promptId;
-                state.inferenceContextCache = null; // Clear cache
-                renderInferenceContext();
-                if (window.renderView) window.renderView();
-            }
-        });
-    });
-
-    // Token slider
-    const tokenSlider = container.querySelector('#token-slider');
-    if (tokenSlider) {
-        tokenSlider.addEventListener('input', (e) => {
-            const newIdx = parseInt(e.target.value);
-            if (state.currentTokenIndex !== newIdx && !isNaN(newIdx)) {
-                state.currentTokenIndex = newIdx;
-                // Update display without full re-render
-                const tokenList = state.inferenceContextCache?.allTokens || [];
-                const nPromptTokens = state.inferenceContextCache?.nPromptTokens || 0;
-                const currentToken = tokenList[newIdx] || '';
-                const displayToken = currentToken
-                    .replace(/\n/g, '↵')
-                    .replace(/\t/g, '→')
-                    .replace(/ /g, '·');
-                const phase = newIdx < nPromptTokens ? 'prompt' : 'response';
-                container.querySelector('.token-index').textContent = newIdx;
-                container.querySelector('.token-phase').textContent = `[${phase}]`;
-                container.querySelector('.token-display').textContent = displayToken;
-                // Update highlighted prompt text
-                const promptTextSpan = container.querySelector('.inference-prompt .inference-text');
-                if (promptTextSpan) {
-                    promptTextSpan.innerHTML = buildHighlightedText(tokenList, newIdx, 0, nPromptTokens, 300);
-                }
-                // Update highlighted response text
-                const responseTextSpan = container.querySelector('.inference-response .inference-text');
-                if (responseTextSpan) {
-                    responseTextSpan.innerHTML = buildHighlightedText(tokenList, newIdx, nPromptTokens, tokenList.length, 300);
-                }
-                // Update plot highlights without full re-render
-                updatePlotTokenHighlights(newIdx, nPromptTokens);
-            }
-        });
-    }
-}
-
-/**
- * Update token highlight shapes on existing Plotly plots (no re-render).
- */
-function updatePlotTokenHighlights(tokenIdx, nPromptTokens) {
-    const startIdx = 1;  // BOS is skipped in all plots
-    const highlightX = tokenIdx - startIdx;
-    const separatorX = (nPromptTokens - startIdx) - 0.5;
-
-    // Get colors from CSS
-    const primaryColor = getCssVar('--primary-color', '#a09f6c');
-    const textSecondary = getCssVar('--text-secondary', '#a4a4a4');
-    const separatorColor = `${primaryColor}80`;
-    const highlightColor = `${primaryColor}33`;
-
-    if (state.currentView === 'all-layers') {
-        // Update all trait heatmaps
-        const filteredTraits = getFilteredTraits();
-        for (const trait of filteredTraits) {
-            const traitId = trait.name.replace(/\//g, '-');
-            const plotDiv = document.getElementById(`trajectory-heatmap-${traitId}`);
-            if (plotDiv && plotDiv.data) {
-                Plotly.relayout(plotDiv, {
-                    shapes: [
-                        { type: 'line', xref: 'x', yref: 'paper', x0: separatorX, x1: separatorX, y0: 0, y1: 1, line: { color: separatorColor, width: 2, dash: 'dash' } },
-                        { type: 'rect', xref: 'x', yref: 'paper', x0: highlightX - 0.5, x1: highlightX + 0.5, y0: 0, y1: 1, fillcolor: highlightColor, line: { width: 0 } }
-                    ]
-                });
-            }
-        }
-    } else if (state.currentView === 'per-token-activation') {
-        // Update combined activation plot
-        const plotDiv = document.getElementById('combined-activation-plot');
-        if (plotDiv && plotDiv.data) {
-            Plotly.relayout(plotDiv, {
-                shapes: [
-                    { type: 'line', x0: separatorX, x1: separatorX, y0: 0, y1: 1, yref: 'paper', line: { color: textSecondary, width: 2, dash: 'dash' } },
-                    { type: 'line', x0: highlightX, x1: highlightX, y0: 0, y1: 1, yref: 'paper', line: { color: primaryColor, width: 2 } }
-                ]
-            });
-        }
-    } else if (state.currentView === 'token-explorer') {
-        // Token Explorer needs full re-render with new token data (data is cached)
-        if (window.renderTokenExplorer) {
-            window.renderTokenExplorer();
-        }
-    }
 }
 
 /**
@@ -517,58 +325,6 @@ function escapeHtml(text) {
         .replace(/"/g, '&quot;');
 }
 
-/**
- * Build text with the current token highlighted and markdown rendered.
- * @param tokenList - full list of all tokens
- * @param currentIdx - absolute index of current token
- * @param startIdx - start of range to display (inclusive)
- * @param endIdx - end of range to display (exclusive)
- * @param maxChars - max characters to show before truncating
- */
-function buildHighlightedText(tokenList, currentIdx, startIdx, endIdx, maxChars) {
-    if (!tokenList || tokenList.length === 0) {
-        return 'Loading...';
-    }
-
-    let result = '';
-    let charCount = 0;
-    let truncated = false;
-
-    for (let i = startIdx; i < endIdx; i++) {
-        const token = tokenList[i];
-        if (!token) continue;
-        const escaped = escapeHtml(token);
-
-        // Check if we'd exceed max chars
-        if (charCount + token.length > maxChars) {
-            truncated = true;
-            break;
-        }
-
-        if (i === currentIdx) {
-            result += `<span class="token-highlight">${escaped}</span>`;
-        } else {
-            result += escaped;
-        }
-        charCount += token.length;
-    }
-
-    if (truncated) {
-        result += '...';
-    }
-
-    // Apply markdown formatting (bold, italic) - works across tokens
-    // Use a placeholder to protect highlight spans from markdown parsing
-    const placeholder = '\x00HIGHLIGHT\x00';
-    result = result.replace(/<span class="token-highlight">(.*?)<\/span>/g, (match, content) => {
-        return placeholder + content + placeholder;
-    });
-    result = markdownToHtml(result);
-    result = result.replace(new RegExp(placeholder + '(.*?)' + placeholder, 'g'), '<span class="token-highlight">$1</span>');
-
-    return result || '(empty)';
-}
-
 // Navigation
 function setupNavigation() {
     const navItems = document.querySelectorAll('.nav-item');
@@ -578,9 +334,9 @@ function setupNavigation() {
             item.classList.add('active');
             if (item.dataset.view) {
                 state.currentView = item.dataset.view;
-                setTabInURL(item.dataset.view);  // NEW: Sync URL
+                setTabInURL(item.dataset.view);
                 updatePageTitle();
-                renderInferenceContext();
+                renderPromptPicker();
                 if (window.renderView) window.renderView();
             }
         });
@@ -591,8 +347,8 @@ function updatePageTitle() {
     const titles = {
         'data-explorer': 'Data Explorer',
         'overview': 'Overview',
+        'trait-extraction': 'Trait Extraction',
         'vectors': 'Vector Analysis',
-        'trait-correlation': 'Trait Correlation',
         'validation': 'Validation Results',
         'monitoring': 'All Layers',
         'prompt-activation': 'Per-Token Activation',
@@ -619,7 +375,7 @@ async function loadExperiments() {
             const isActive = idx === 0 ? 'active' : '';
             return `
                 <div class="nav-item ${isActive}" data-experiment="${exp}">
-                    <span class="icon">🔬</span>
+                    <span class="icon">${idx === 0 ? '✓' : ''}</span>
                     <span>${displayName}</span>
                 </div>
             `;
@@ -627,12 +383,16 @@ async function loadExperiments() {
 
         list.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', async () => {
-                list.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                list.querySelectorAll('.nav-item').forEach(i => {
+                    i.classList.remove('active');
+                    i.querySelector('.icon').textContent = '';
+                });
                 item.classList.add('active');
+                item.querySelector('.icon').textContent = '✓';
                 state.currentExperiment = item.dataset.experiment;
                 await loadExperimentData(state.currentExperiment);
                 // Re-render current view with new experiment data
-                renderInferenceContext();
+                renderPromptPicker();
                 if (window.renderView) window.renderView();
             });
         });
@@ -701,7 +461,7 @@ async function loadExperimentData(experimentName) {
                     metadata = await metadataRes.json();
                 }
             } catch (e) {
-                // Metadata is optional - will fall back to defaults (26 layers for Gemma 2B)
+                // Metadata is optional - will fall back to defaults if missing
                 console.warn(`No metadata for ${traitName}`);
             }
 
@@ -722,12 +482,6 @@ async function loadExperimentData(experimentName) {
                 hasVectors: hasVectors,
                 metadata: metadata
             });
-        }
-
-        // Update experiment badge
-        const badge = document.getElementById('experiment-badge');
-        if (badge) {
-            badge.textContent = experimentName.replace(/_/g, ' ');
         }
 
         console.log(`Loaded ${state.experimentData.traits.length} traits for ${experimentName}:`);
@@ -776,7 +530,10 @@ async function discoverAvailablePrompts() {
         console.error('Error fetching prompt sets:', e);
     }
 
-    // Set default selection - prefer sets with "single" in name, then alphabetical
+    // Restore from localStorage or set default selection
+    const savedPromptSet = localStorage.getItem('promptSet');
+    const savedPromptId = localStorage.getItem('promptId');
+
     state.currentPromptSet = null;
     state.currentPromptId = null;
 
@@ -792,7 +549,17 @@ async function discoverAvailablePrompts() {
             return a.localeCompare(b);
         });
 
-    if (setsWithData.length > 0) {
+    // Try to restore saved selection if valid
+    if (savedPromptSet && state.promptsWithData[savedPromptSet]?.length > 0) {
+        state.currentPromptSet = savedPromptSet;
+        const savedId = parseInt(savedPromptId);
+        if (state.promptsWithData[savedPromptSet].includes(savedId)) {
+            state.currentPromptId = savedId;
+        } else {
+            state.currentPromptId = state.promptsWithData[savedPromptSet][0];
+        }
+    } else if (setsWithData.length > 0) {
+        // Fall back to default
         const [setName, promptIds] = setsWithData[0];
         state.currentPromptSet = setName;
         state.currentPromptId = promptIds[0];
@@ -802,7 +569,7 @@ async function discoverAvailablePrompts() {
     console.log('Prompts with data:', state.promptsWithData);
     console.log('Current selection:', state.currentPromptSet, state.currentPromptId);
 
-    renderInferenceContext();
+    renderPromptPicker();
 }
 
 // Event Listeners Setup
@@ -810,20 +577,9 @@ function setupEventListeners() {
     // Theme toggle
     document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
 
-    // Info button
-    document.getElementById('info-btn')?.addEventListener('click', toggleInfo);
-
     // Select all traits button
     document.getElementById('select-all-btn')?.addEventListener('click', toggleAllTraits);
 
-    // Close info tooltip when clicking outside
-    document.addEventListener('click', (e) => {
-        const tooltip = document.getElementById('info-tooltip');
-        const infoBtn = document.getElementById('info-btn');
-        if (tooltip && !tooltip.contains(e.target) && e.target !== infoBtn) {
-            tooltip.classList.remove('show');
-        }
-    });
 }
 
 // Utility Functions
@@ -863,19 +619,28 @@ function getPlotlyLayout(baseLayout = {}) {
     };
 }
 
-// Standard colorscale for trait heatmaps (asymmetric: vibrant red + muted blue)
-// Optimized for [0, +1] data where positive values matter more
+// Standard colorscale for trait heatmaps (emerald to rose: green=positive, red=negative)
+// Forest→Coral: low values (red/coral), high values (green/forest)
 const ASYMB_COLORSCALE = [
-    [0, '#5a6a8a'],
-    [0.25, '#98a4b0'],
-    [0.5, '#c8c8c8'],
-    [0.75, '#d47c67'],
-    [1, '#b40426']
+    [0, '#d47c67'],
+    [0.25, '#e8b0a0'],
+    [0.5, '#e8e8c8'],
+    [0.75, '#91cf60'],
+    [1, '#1a9850']
 ];
 
 // Get CSS variable value helper
 function getCssVar(name, fallback = '') {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+// Get token highlight colors for Plotly shapes (single source of truth)
+function getTokenHighlightColors() {
+    const primaryColor = getCssVar('--primary-color', '#a09f6c');
+    return {
+        separator: `${primaryColor}80`,  // 50% opacity - prompt/response divider
+        highlight: `${primaryColor}80`   // 50% opacity - current token highlight
+    };
 }
 
 // URL-based tab routing functions
@@ -903,7 +668,7 @@ function initFromURL() {
 // Handle browser back/forward buttons
 window.addEventListener('popstate', () => {
     initFromURL();
-    renderInferenceContext();
+    renderPromptPicker();
     if (window.renderView) window.renderView();
 });
 
@@ -946,7 +711,7 @@ async function init() {
 
     // NEW: Read tab from URL and render
     initFromURL();
-    renderInferenceContext();
+    renderPromptPicker();
     if (window.renderView) window.renderView();
 }
 
@@ -957,7 +722,9 @@ window.getFilteredTraits = getFilteredTraits;
 window.getPlotlyLayout = getPlotlyLayout;
 window.ASYMB_COLORSCALE = ASYMB_COLORSCALE;
 window.getCssVar = getCssVar;
+window.getTokenHighlightColors = getTokenHighlightColors;
 window.showError = showError;
 window.initApp = init;
+window.escapeHtml = escapeHtml;
 window.markdownToHtml = markdownToHtml;
 window.renderMath = renderMath;

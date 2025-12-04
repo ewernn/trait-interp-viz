@@ -9,8 +9,13 @@ import socketserver
 import os
 import sys
 import json
+import yaml
 import subprocess
 from pathlib import Path
+
+# Add parent directory to path to import utils
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.paths import get as get_path
 
 PORT = int(os.environ.get('PORT', 8000))
 
@@ -29,40 +34,32 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     }
 
     def log_message(self, format, *args):
-        """Override to suppress noisy 404 logs and improve error messages."""
+        """Override to suppress noisy logs."""
         # Suppress 404s for HEAD requests (file existence checks)
         if len(args) >= 2 and args[1] == '404' and self.command == 'HEAD':
             return
 
-        # Suppress 304 (Not Modified) for less noise
+        # Suppress 304 (Not Modified)
         if len(args) >= 2 and args[1] == '304':
             return
 
-        # Enhanced 404 logging - show what file was requested
+        # Suppress all 404s (browser requests for optional files)
         if len(args) >= 2 and args[1] == '404':
-            # Extract path from request string "GET /path HTTP/1.1"
-            request_parts = args[0].split(' ')
-            path = request_parts[1] if len(request_parts) > 1 else args[0]
-
-            # Suppress expected 404s (traits without inference data, optional files)
-            if '/residual_stream/' in path or '/README.md' in path or '/favicon.ico' in path:
-                return  # Expected - not all traits have inference data, READMEs optional
-
-            # Clarify common issues
-            if '/visualization/experiments/' in path:
-                self.log_error("❌ 404: %s (Should not have /visualization/ prefix - bug in frontend path construction)", path)
-            elif '/experiments/' in path:
-                self.log_error("❌ 404: %s (File missing or not synced from R2)", path)
-            else:
-                self.log_error("❌ 404: %s", path)
             return
 
-        # Suppress generic "File not found" messages (redundant with above)
-        if 'File not found' in format or 'code 404' in format:
+        # Suppress base class "code 404" messages
+        if 'code 404' in format or 'File not found' in format:
             return
 
-        # Log everything else normally
+        # Log successful requests and errors
         super().log_message(format, *args)
+
+    def log_error(self, format, *args):
+        """Override to suppress error logs for expected 404s."""
+        # Suppress all 404 error logs
+        if '404' in format:
+            return
+        super().log_error(format, *args)
 
     def end_headers(self):
         """Add CORS headers to all responses."""
@@ -79,6 +76,11 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests, including API endpoints."""
         try:
+            # API endpoint: get data schema
+            if self.path == '/api/schema':
+                self.send_api_response(self.get_schema())
+                return
+
             # API endpoint: list experiments
             if self.path == '/api/experiments':
                 self.send_api_response(self.list_experiments())
@@ -130,19 +132,6 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             if self.path == '/' or self.path == '/index.html' or self.path.startswith('/?'):
                 self.path = '/visualization/index.html'
 
-            # Backwards compatibility redirects
-            elif self.path == '/overview':
-                self.send_response(301)
-                self.send_header('Location', '/?tab=overview')
-                self.end_headers()
-                return
-
-            elif self.path == '/visualization/' or self.path == '/visualization/index.html':
-                self.send_response(301)
-                self.send_header('Location', '/?tab=overview')
-                self.end_headers()
-                return
-
             # Serve design playground
             if self.path == '/design':
                 self.path = '/visualization/design.html'
@@ -150,7 +139,8 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             # Default: serve files
             super().do_GET()
         except (BrokenPipeError, ConnectionResetError):
-            self.log_message("Connection broken by client")
+            # Browser cancelled request - expected when loading many files
+            pass
 
     def send_api_response(self, data):
         """Send JSON API response."""
@@ -159,9 +149,19 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
+    def get_schema(self):
+        """Get data schema from paths.yaml."""
+        config_path = Path(__file__).parent.parent / 'config' / 'paths.yaml'
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            return config.get('schema', {})
+        except Exception as e:
+            return {'error': str(e)}
+
     def list_experiments(self):
         """List all experiments in experiments/ directory."""
-        experiments_dir = Path('experiments')
+        experiments_dir = get_path('experiments.list')
         if not experiments_dir.exists():
             return {'experiments': []}
 
@@ -201,18 +201,23 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 if has_traits:
                     experiments.append(item.name)
 
-        return {'experiments': sorted(experiments)}
+        # Sort alphabetically, but prioritize gemma-2-2b-it as default
+        def sort_key(name):
+            if name == 'gemma-2-2b-it':
+                return (0, name)
+            return (1, name)
+        return {'experiments': sorted(experiments, key=sort_key)}
 
     def list_traits(self, experiment_name):
         """List all traits for an experiment."""
-        exp_dir = Path('experiments') / experiment_name
+        exp_dir = get_path('experiments.base', experiment=experiment_name)
         if not exp_dir.exists():
             return {'traits': []}
 
         traits = []
 
         # Check for extraction/{category}/ structure
-        extraction_dir = exp_dir / 'extraction'
+        extraction_dir = get_path('extraction.base', experiment=experiment_name)
         if not extraction_dir.exists():
             return {'traits': []}
 
@@ -243,9 +248,9 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         Discovers available prompts by scanning raw/residual/{prompt_set}/ directories.
         Also loads prompt definitions from inference/prompts/{set}.json files.
         """
-        exp_dir = Path('experiments') / experiment_name
+        exp_dir = get_path('experiments.base', experiment=experiment_name)
         prompts_def_dir = exp_dir / 'inference' / 'prompts'
-        raw_residual_dir = exp_dir / 'inference' / 'raw' / 'residual'
+        raw_residual_dir = get_path('inference.raw', experiment=experiment_name) / 'residual'
 
         prompt_sets = []
 
@@ -284,7 +289,8 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def list_prompts_in_set(self, experiment_name, prompt_set):
         """List all prompts in a specific prompt set."""
-        prompt_file = Path('experiments') / experiment_name / 'inference' / 'prompts' / f'{prompt_set}.txt'
+        inference_dir = get_path('inference.base', experiment=experiment_name)
+        prompt_file = inference_dir / 'prompts' / f'{prompt_set}.txt'
         if not prompt_file.exists():
             return {'error': f'Prompt set not found: {prompt_set}'}
 
@@ -300,10 +306,10 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def send_inference_projection(self, experiment_name, category, trait, prompt_set, prompt_id):
         """Send inference projection data for a specific trait and prompt."""
-        projection_file = (
-            Path('experiments') / experiment_name / 'inference' / 'projections' /
-            category / trait / prompt_set / f'{prompt_id}.json'
-        )
+        trait_path = f"{category}/{trait}"
+        projection_dir = get_path('inference.residual_stream', experiment=experiment_name, trait=trait_path, prompt_set=prompt_set)
+        filename = get_path('patterns.residual_stream_json', prompt_id=prompt_id)
+        projection_file = projection_dir / filename
 
         if not projection_file.exists():
             self.send_api_response({
@@ -319,8 +325,8 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_api_response({'error': str(e)})
 
 def cache_integrity_data():
-    """Run check_available_data.py for each experiment and cache results."""
-    experiments_dir = Path('experiments')
+    """Run data_checker.py for each experiment and cache results."""
+    experiments_dir = get_path('experiments.list')
     if not experiments_dir.exists():
         return
 
@@ -329,7 +335,7 @@ def cache_integrity_data():
             continue
 
         # Check if experiment has extraction data
-        extraction_dir = exp_dir / 'extraction'
+        extraction_dir = get_path('extraction.base', experiment=exp_dir.name)
         if not extraction_dir.exists():
             continue
 
@@ -337,7 +343,7 @@ def cache_integrity_data():
             result = subprocess.run(
                 [
                     sys.executable,
-                    'analysis/check_available_data.py',
+                    'analysis/data_checker.py',
                     '--experiment', exp_dir.name,
                     '--json_output'
                 ],

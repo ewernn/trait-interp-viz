@@ -17,13 +17,11 @@ visualization/
 └── views/                  # View modules (render functions)
     ├── overview.js            # Methodology documentation (markdown + KaTeX)
     ├── data-explorer.js       # File browser with integrity check
-    ├── trait-dashboard.js     # Vector quality and evaluation
-    ├── trait-correlation.js   # Pairwise trait correlation matrix
-    ├── all-layers.js          # Residual stream across all layers
-    ├── per-token-activation.js # Per-token trait trajectories
+    ├── trait-extraction.js    # Comprehensive extraction quality view
+    ├── trait-trajectory.js     # Residual stream across all layers
+    ├── trait-dynamics.js       # Per-token trait trajectories
     ├── layer-deep-dive.js     # Single layer mechanistic view
-    ├── analysis-gallery.js    # Browse analysis outputs (PNGs + JSON)
-    └── token-explorer.js      # Interactive per-token analysis
+    └── analysis-gallery.js    # Unified live-rendered analysis with token slider
 ```
 
 ## Architecture Principles
@@ -47,8 +45,8 @@ window.renderView = function() {
     switch (window.state.currentView) {
         case 'overview': window.renderOverview(); break;
         case 'data-explorer': window.renderDataExplorer(); break;
-        case 'trait-dashboard': window.renderTraitDashboard(); break;
-        // ... 6 more views
+        case 'trait-extraction': window.renderTraitExtraction(); break;
+        // ... 5 more views
     }
 };
 ```
@@ -98,30 +96,37 @@ const integrityResponse = await fetch(integrityUrl);
 const integrity = await integrityResponse.json();
 ```
 
-### 4. Inference Context Panel
+### 4. Prompt Picker
 
-Inference views (`all-layers`, `per-token-activation`, `layer-deep-dive`) share a common prompt picker and prompt/response display rendered by `renderInferenceContext()` in `state.js`.
+Inference views (`trait-trajectory`, `trait-dynamics`, `layer-deep-dive`, `analysis-gallery`) share a common prompt picker fixed at the bottom of the page, rendered by `renderPromptPicker()` in `prompt-picker.js`.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Header                                                   │
 ├─────────────────────────────────────────────────────────┤
-│ [prompt set ▼] [1] [2] [3] ...   ← Prompt picker        │
-│ Prompt: "What year was..."       ← Shared context       │
+│ View content (visualizations)                            │
+│                                                          │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ Prompt Picker (fixed bottom, 700px centered)             │
+│ [prompt set ▼] [1] [2] [3] ...                          │
+│ Prompt: "What year was..."                              │
 │ Response: "The Treaty..."                               │
-├─────────────────────────────────────────────────────────┤
-│ View content (just visualizations, no prompt text)      │
+│ Token: [=====slider=====] 42                            │
 └─────────────────────────────────────────────────────────┘
 ```
 
 - **Shows** for inference views only (hidden for trait development views)
-- Prompt/response fetched once and cached in `state.inferenceContextCache`
+- **Persists** selection to localStorage (restored on page refresh)
+- Prompt/response fetched once and cached in `state.promptPickerCache`
 - Views access current selection via `state.currentPromptSet` and `state.currentPromptId`
 
 ### 5. Module Loading
 
 Modules load via `<script>` tags in order:
-1. Core modules (paths, state)
+1. Core modules (paths, state, prompt-picker)
 2. View modules (all views)
 3. Router (dispatches to views)
 
@@ -178,7 +183,7 @@ The `serve.py` server provides:
 | `/api/integrity/{name}.json` | Cached integrity check data |
 | `/api/experiments/{name}/inference/prompt-sets` | List prompt sets with available IDs |
 
-Integrity data is cached on server startup by running `check_available_data.py` for each experiment.
+Integrity data is cached on server startup by running `data_checker.py` for each experiment.
 
 ## Development
 
@@ -200,8 +205,7 @@ python visualization/serve.py
 | View | Purpose |
 |------|---------|
 | data-explorer | Browse extraction files with integrity status |
-| trait-dashboard | Vector quality metrics and evaluation results |
-| trait-correlation | Pairwise correlation matrix between traits |
-| all-layers | Residual stream projections across all layers |
-| per-token-activation | Token-by-token trait trajectories |
+| trait-extraction | Comprehensive extraction quality: methods, metrics, scoring, layer×method heatmaps, best vectors, independence analysis |
+| trait-trajectory | Residual stream projections across all layers |
+| trait-dynamics | Token-by-token trait trajectories |
 | layer-deep-dive | Attention heads and MLP neurons for single layer |

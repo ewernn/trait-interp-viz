@@ -5,11 +5,13 @@
 # Variables:
 #   {experiment} - experiment name
 #   {trait} - full trait path (e.g., cognitive_state/context)
-#   {method} - extraction method (probe, mean_diff, ica, gradient)
+#   {method} - extraction method (probe, mean_diff, gradient)
 #   {layer} - layer number
 #   {prompt_set} - prompt set name (e.g., single_trait, multi_trait, dynamic, adversarial, baseline, real_world)
 #   {prompt_id} - prompt ID within a set (integer)
 #   {format} - file format (json is standard; csv kept for backwards compatibility)
+#   {category} - analysis category (e.g., normalized_velocity, trait_projections, derivative_overlay)
+#   {filename} - generic filename without extension
 
 # =============================================================================
 # EXPERIMENT STRUCTURE
@@ -17,6 +19,7 @@
 
 experiments:
   base: "experiments/{experiment}"
+  config: "experiments/{experiment}/config.json"
   list: "experiments"
 
 # =============================================================================
@@ -55,6 +58,31 @@ inference:
   residual_stream: "experiments/{experiment}/inference/{trait}/residual_stream/{prompt_set}"
 
 # =============================================================================
+# ANALYSIS (experiment-level aggregated analysis outputs)
+# =============================================================================
+
+analysis:
+  base: "experiments/{experiment}/analysis"
+  index: "experiments/{experiment}/analysis/index.json"
+  per_token: "experiments/{experiment}/analysis/per_token/{prompt_set}"
+  category: "experiments/{experiment}/analysis/{category}"
+
+# =============================================================================
+# STEERING (intervention evaluation - validates vectors via causal control)
+# =============================================================================
+
+steering:
+  base: "experiments/{experiment}/steering"
+  trait: "experiments/{experiment}/steering/{trait}"
+  results: "experiments/{experiment}/steering/{trait}/results.json"
+  sweep_results: "experiments/{experiment}/steering/{trait}/sweep_results.json"
+  responses: "experiments/{experiment}/steering/{trait}/responses"
+
+  # Eval prompts (separate from extraction prompts)
+  prompts_dir: "analysis/steering/prompts"
+  prompt_file: "analysis/steering/prompts/{trait}.json"
+
+# =============================================================================
 # EXTRACTION EVALUATION (aggregate quality metrics for extracted vectors)
 # =============================================================================
 
@@ -80,8 +108,6 @@ patterns:
   # Responses
   pos_responses: "pos.{format}"
   neg_responses: "neg.{format}"
-  val_pos_prompts: "val_positive.txt"
-  val_neg_prompts: "val_negative.txt"
   pos_prompts: "positive.txt"
   neg_prompts: "negative.txt"
 
@@ -94,6 +120,14 @@ patterns:
 
   # Trait definition
   trait_definition: "trait_definition.txt"
+
+  # Analysis outputs
+  per_token_json: "{prompt_id}.json"
+  analysis_prompt_png: "prompt_{prompt_id}.png"
+  analysis_prompt_json: "prompt_{prompt_id}.json"
+  analysis_named_png: "{filename}.png"
+  analysis_named_json: "{filename}.json"
+  analysis_trait_prompt_png: "prompt_{prompt_id}_{trait}.png"
 
 # =============================================================================
 # GLOBAL DIRECTORIES
@@ -108,3 +142,52 @@ global:
   visualization: "visualization"
   config: "config"
   utils: "utils"
+
+# =============================================================================
+# DATA SCHEMA (structure + validation + discovery)
+# =============================================================================
+# Single source of truth for what files CAN exist and what MUST exist.
+# Used by: analysis/data_checker.py, visualization/views/data-explorer.js
+#
+# Structure: defines all possible files (read by data_checker.py)
+# Required: defines minimum for a valid trait (used for status)
+# Discovery: methods, analysis categories, inference types (from filesystem)
+
+schema:
+  # Model configuration is per-experiment (stored in activations/metadata.json)
+  # n_layers, hidden_dim, etc. are discovered from metadata, not hardcoded here
+
+  # ==========================================================================
+  # STRUCTURE: What files CAN exist (complete experiment)
+  # ==========================================================================
+  extraction:
+    prompts:
+      - "positive.txt"
+      - "negative.txt"
+    metadata:
+      - "generation_metadata.json"
+      - "trait_definition.txt"
+    responses:
+      - "responses/pos.json"
+      - "responses/neg.json"
+    # Activations: single file containing all layers
+    activations:
+      - "activations/all_layers.pt"       # Shape: [n_examples, n_layers, hidden_dim]
+      - "val_activations/val_pos_layer{N}.pt"  # Per-layer format (from --val-split)
+      - "val_activations/val_neg_layer{N}.pt"  # Per-layer format (from --val-split)
+    # Vectors: {method}_layer{layer}.pt - methods DISCOVERED from filesystem
+
+  # ==========================================================================
+  # REQUIRED: What files MUST exist (minimum for valid trait)
+  # ==========================================================================
+  required:
+    extraction:
+      - "positive.txt"
+      - "negative.txt"
+
+  # ==========================================================================
+  # DISCOVERY: Content discovered from filesystem (not listed, just documented)
+  # ==========================================================================
+  # - Extraction methods: vectors/{method}_layer*.pt
+  # - Analysis categories: analysis/{category}/
+  # - Inference types: inference/raw/{type}/

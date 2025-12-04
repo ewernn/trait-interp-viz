@@ -48,54 +48,6 @@
         </div>
     </div>
 
-    <!-- Info tooltip (global) -->
-    <div class="info-tooltip" id="info-tooltip">
-        <h3>📊 Trait Interpretation Visualization</h3>
-
-        <h4>🔧 Tools:</h4>
-        <ul>
-            <li><strong>Trait Development:</strong></li>
-            <ul>
-                <li><strong>Data Explorer</strong> - Inspect raw responses, activations, and vectors.</li>
-                <li><strong>Trait Dashboard</strong> - Comprehensive view of a trait's vector properties and quality metrics.</li>
-                <li><strong>Trait Correlation Matrix</strong> - Analyze relationships between trait vectors.</li>
-            </ul>
-            <li><strong>Inference Analysis:</strong></li>
-            <ul>
-                <li><strong>Trait Trajectory</strong> - View a single trait's activation across all layers.</li>
-                <li><strong>Multi-Trait Comparison</strong> - Compare multiple traits' activations over tokens.</li>
-                <li><strong>Layer Deep Dive</strong> - Deep dive into a single layer's attention and MLP components.</li>
-            </ul>
-        </ul>
-
-        <h4>🧠 Available Traits (16 cognitive primitives):</h4>
-        <div class="trait-list">
-            <li>refusal</li>
-            <li>uncertainty_calibration</li>
-            <li>sycophancy</li>
-            <li>retrieval_construction</li>
-            <li>commitment_strength</li>
-            <li>abstract_concrete</li>
-            <li>cognitive_load</li>
-            <li>context_adherence</li>
-            <li>convergent_divergent</li>
-            <li>emotional_valence</li>
-            <li>instruction_boundary</li>
-            <li>local_global</li>
-            <li>paranoia_trust</li>
-            <li>power_dynamics</li>
-            <li>serial_parallel</li>
-            <li>temporal_focus</li>
-        </div>
-
-        <h4>💡 Quick Tips:</h4>
-        <ul>
-            <li>Select traits in the sidebar to filter data</li>
-            <li>Use the theme toggle (🌙/☀️) for dark mode</li>
-            <li>Separation scores >40 indicate excellent quality</li>
-        </ul>
-    </div>
-
     <div class="container">
         <!-- Transformer Architecture Visualization -->
         <!-- <div class="transformer-sidebar" id="transformer-sidebar">
@@ -141,13 +93,9 @@
                         <span class="icon">🗂️</span>
                         <span>Data Explorer</span>
                     </div>
-                    <div class="nav-item" data-view="trait-dashboard">
-                        <span class="icon">📈</span>
-                        <span>Trait Dashboard</span>
-                    </div>
-                    <div class="nav-item" data-view="trait-correlation">
-                        <span class="icon">↔️</span>
-                        <span>Trait Correlation Matrix</span>
+                    <div class="nav-item" data-view="trait-extraction">
+                        <span class="icon">🔬</span>
+                        <span>Trait Extraction</span>
                     </div>
                 </div>
             </div>
@@ -155,13 +103,13 @@
             <div class="sidebar-section">
                 <div class="section-title">Inference Analysis</div>
                 <div id="nav-items-inference">
-                    <div class="nav-item" data-view="all-layers">
+                    <div class="nav-item" data-view="trait-trajectory">
                         <span class="icon">⚡</span>
                         <span>Trait Trajectory</span>
                     </div>
-                    <div class="nav-item" data-view="per-token-activation">
+                    <div class="nav-item" data-view="trait-dynamics">
                         <span class="icon">📈</span>
-                        <span>Multi-Trait Comparison</span>
+                        <span>Trait Dynamics</span>
                     </div>
                     <div class="nav-item" data-view="layer-deep-dive">
                         <span class="icon">🔬</span>
@@ -171,9 +119,13 @@
                         <span class="icon">🖼️</span>
                         <span>Analysis Gallery</span>
                     </div>
-                    <div class="nav-item" data-view="token-explorer">
-                        <span class="icon">🔍</span>
-                        <span>Token Explorer</span>
+                    <div class="nav-item" data-view="steering-sweep">
+                        <span class="icon">🎯</span>
+                        <span>Steering Sweep</span>
+                    </div>
+                    <div class="nav-item" data-view="multi-layer-heatmap">
+                        <span class="icon">🗺️</span>
+                        <span>Multi-Layer Heatmap</span>
                     </div>
                 </div>
             </div>
@@ -190,23 +142,19 @@
         <!-- Main Content -->
         <div class="main-content">
             <header>
-                <div class="header-left">
-                    <button class="info-btn" id="info-btn" title="Information">ℹ️</button>
-                    <div class="page-title" id="page-title">Overview</div>
-                    <div class="experiment-badge" id="experiment-badge">-</div>
-                    </div>
+                <div class="page-title" id="page-title">Overview</div>
                 <div class="header-right">
                     <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">🌙</button>
                 </div>
             </header>
 
-            <!-- Inference Context: prompt picker + prompt/response display (only for inference views) -->
-            <div id="inference-context" style="display: none;">
-                <!-- Populated by renderInferenceContext() in state.js -->
-            </div>
-
             <div class="content-wrapper" id="content-area">
                 <div class="loading">Loading experiment data...</div>
+            </div>
+
+            <!-- Prompt Picker: fixed at bottom (only for inference views) -->
+            <div id="prompt-picker" style="display: none;">
+                <!-- Populated by renderPromptPicker() in prompt-picker.js -->
             </div>
         </div>
     </div>
@@ -214,17 +162,18 @@
     <!-- Application Modules -->
     <script src="/visualization/core/paths.js"></script>
     <script src="/visualization/core/state.js"></script>
+    <script src="/visualization/core/prompt-picker.js"></script>
 
     <!-- View Modules -->
     <script src="/visualization/views/overview.js"></script>
     <script src="/visualization/views/data-explorer.js"></script>
-    <script src="/visualization/views/trait-dashboard.js"></script>
-    <script src="/visualization/views/trait-correlation.js"></script>
-    <script src="/visualization/views/all-layers.js"></script>
-    <script src="/visualization/views/per-token-activation.js"></script>
+    <script src="/visualization/views/trait-extraction.js"></script>
+    <script src="/visualization/views/trait-trajectory.js"></script>
+    <script src="/visualization/views/trait-dynamics.js"></script>
     <script src="/visualization/views/layer-deep-dive.js"></script>
     <script src="/visualization/views/analysis-gallery.js"></script>
-    <script src="/visualization/views/token-explorer.js"></script>
+    <script src="/visualization/views/steering-sweep.js"></script>
+    <script src="/visualization/views/multi-layer-heatmap.js"></script>
 
     <!-- View Router -->
     <script>
@@ -236,13 +185,13 @@
             const viewTitles = {
                 'overview': 'Overview',
                 'data-explorer': 'Data Explorer',
-                'trait-dashboard': 'Trait Dashboard',
-                'trait-correlation': 'Trait Correlation Matrix',
-                'all-layers': 'Trait Trajectory',
-                'per-token-activation': 'Multi-Trait Comparison',
+                'trait-extraction': 'Trait Extraction',
+                'trait-trajectory': 'Trait Trajectory',
+                'trait-dynamics': 'Trait Dynamics',
                 'layer-deep-dive': 'Layer Deep Dive',
                 'analysis-gallery': 'Analysis Gallery',
-                'token-explorer': 'Token Explorer'
+                'steering-sweep': 'Steering Sweep',
+                'multi-layer-heatmap': 'Multi-Layer Heatmap'
             };
             document.getElementById('page-title').textContent = viewTitles[view] || 'Unknown View';
 
@@ -253,17 +202,14 @@
                 case 'data-explorer':
                     window.renderDataExplorer();
                     break;
-                case 'trait-dashboard':
-                    window.renderTraitDashboard(); // New combined view
+                case 'trait-extraction':
+                    window.renderTraitExtraction();
                     break;
-                case 'trait-correlation':
-                    window.renderTraitCorrelation();
+                case 'trait-trajectory':
+                    window.renderTraitTrajectory();
                     break;
-                case 'all-layers':
-                    window.renderAllLayers();
-                    break;
-                case 'per-token-activation':
-                    window.renderPerTokenActivation();
+                case 'trait-dynamics':
+                    window.renderTraitDynamics();
                     break;
                 case 'layer-deep-dive':
                     window.renderLayerDeepDive();
@@ -271,8 +217,11 @@
                 case 'analysis-gallery':
                     window.renderAnalysisGallery();
                     break;
-                case 'token-explorer':
-                    window.renderTokenExplorer();
+                case 'steering-sweep':
+                    window.renderSteeringSweep();
+                    break;
+                case 'multi-layer-heatmap':
+                    window.renderMultiLayerHeatmap();
                     break;
                 default:
                     document.getElementById('content-area').innerHTML =
