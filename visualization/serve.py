@@ -11,7 +11,9 @@ import sys
 import json
 import yaml
 import subprocess
+import threading
 from pathlib import Path
+from datetime import datetime
 
 # Add parent directory to path to import utils
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -21,6 +23,39 @@ PORT = int(os.environ.get('PORT', 8000))
 
 # Cache for integrity data (populated on startup)
 integrity_cache = {}
+
+# Simple analytics
+ANALYTICS_FILE = Path(os.environ.get('ANALYTICS_PATH', '/app/analytics.json'))
+analytics_lock = threading.Lock()
+
+def load_analytics():
+    """Load analytics from file."""
+    if ANALYTICS_FILE.exists():
+        try:
+            with open(ANALYTICS_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {'total': 0, 'daily': {}, 'paths': {}}
+
+def save_analytics(data):
+    """Save analytics to file."""
+    try:
+        ANALYTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(ANALYTICS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except IOError as e:
+        print(f"Failed to save analytics: {e}")
+
+def record_visit(path):
+    """Record a page visit."""
+    with analytics_lock:
+        data = load_analytics()
+        data['total'] += 1
+        today = datetime.now().strftime('%Y-%m-%d')
+        data['daily'][today] = data['daily'].get(today, 0) + 1
+        data['paths'][path] = data['paths'].get(path, 0) + 1
+        save_analytics(data)
 
 class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP request handler with CORS support and API endpoints."""
@@ -76,6 +111,11 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests, including API endpoints."""
         try:
+            # Analytics endpoint
+            if self.path == '/analytics':
+                self.send_analytics_page()
+                return
+
             # API endpoint: get data schema
             if self.path == '/api/schema':
                 self.send_api_response(self.get_schema())
@@ -130,10 +170,12 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             # Serve SPA at root (including with query params like /?tab=...)
             if self.path == '/' or self.path == '/index.html' or self.path.startswith('/?'):
+                record_visit('/')
                 self.path = '/visualization/index.html'
 
             # Serve design playground
-            if self.path == '/design':
+            elif self.path == '/design':
+                record_visit('/design')
                 self.path = '/visualization/design.html'
 
             # Default: serve files
@@ -148,6 +190,64 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
+
+    def send_analytics_page(self):
+        """Send simple analytics page."""
+        data = load_analytics()
+
+        # Sort daily by date descending
+        daily_sorted = sorted(data.get('daily', {}).items(), reverse=True)[:30]
+        daily_html = '\n'.join(
+            f'<tr><td>{date}</td><td>{count}</td></tr>'
+            for date, count in daily_sorted
+        ) or '<tr><td colspan="2">No data yet</td></tr>'
+
+        # Sort paths by count descending
+        paths_sorted = sorted(data.get('paths', {}).items(), key=lambda x: -x[1])[:10]
+        paths_html = '\n'.join(
+            f'<tr><td>{path}</td><td>{count}</td></tr>'
+            for path, count in paths_sorted
+        ) or '<tr><td colspan="2">No data yet</td></tr>'
+
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>Analytics</title>
+    <style>
+        body {{ font-family: system-ui, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }}
+        h1 {{ color: #333; }}
+        .total {{ font-size: 48px; font-weight: bold; color: #2563eb; }}
+        table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+        th, td {{ padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }}
+        th {{ background: #f5f5f5; }}
+        a {{ color: #2563eb; }}
+    </style>
+</head>
+<body>
+    <h1>Analytics</h1>
+    <p class="total">{data.get('total', 0)}</p>
+    <p>Total page views</p>
+
+    <h2>Last 30 Days</h2>
+    <table>
+        <tr><th>Date</th><th>Views</th></tr>
+        {daily_html}
+    </table>
+
+    <h2>Top Pages</h2>
+    <table>
+        <tr><th>Path</th><th>Views</th></tr>
+        {paths_html}
+    </table>
+
+    <p><a href="/">&larr; Back to app</a></p>
+</body>
+</html>'''
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+        self.wfile.write(html.encode())
 
     def get_schema(self):
         """Get data schema from paths.yaml."""
@@ -245,45 +345,68 @@ class CORSHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     def list_prompt_sets(self, experiment_name):
         """List all prompt sets with available prompt IDs for an experiment.
 
-        Discovers available prompts by scanning raw/residual/{prompt_set}/ directories.
+        Discovers available prompts by scanning inference/{category}/{trait}/residual_stream/{prompt_set}/.
         Also loads prompt definitions from inference/prompts/{set}.json files.
         """
         exp_dir = get_path('experiments.base', experiment=experiment_name)
         prompts_def_dir = exp_dir / 'inference' / 'prompts'
-        raw_residual_dir = get_path('inference.raw', experiment=experiment_name) / 'residual'
+        inference_dir = get_path('inference.base', experiment=experiment_name)
+
+        # Discover prompt sets and their available IDs from trait residual_stream directories
+        discovered_sets = {}  # {set_name: set(prompt_ids)}
+
+        if inference_dir.exists():
+            # Walk through inference/{category}/{trait}/residual_stream/{prompt_set}/
+            for category_dir in inference_dir.iterdir():
+                if not category_dir.is_dir() or category_dir.name in ('prompts', 'raw'):
+                    continue
+                for trait_dir in category_dir.iterdir():
+                    if not trait_dir.is_dir():
+                        continue
+                    residual_stream_dir = trait_dir / 'residual_stream'
+                    if not residual_stream_dir.exists():
+                        continue
+                    for prompt_set_dir in residual_stream_dir.iterdir():
+                        if not prompt_set_dir.is_dir():
+                            continue
+                        set_name = prompt_set_dir.name
+                        if set_name not in discovered_sets:
+                            discovered_sets[set_name] = set()
+                        # Find available IDs from JSON files
+                        for json_file in prompt_set_dir.glob('*.json'):
+                            try:
+                                prompt_id = int(json_file.stem)
+                                discovered_sets[set_name].add(prompt_id)
+                            except ValueError:
+                                continue
 
         prompt_sets = []
 
-        # Get prompt set definitions from JSON files
+        # Build response with definitions (if available) and discovered IDs
+        all_set_names = set(discovered_sets.keys())
+
+        # Also include sets from prompt definitions even if no data yet
         if prompts_def_dir.exists():
             for prompt_file in prompts_def_dir.glob('*.json'):
-                set_name = prompt_file.stem
+                all_set_names.add(prompt_file.stem)
 
-                # Load prompt definitions
+        for set_name in all_set_names:
+            # Load prompt definitions if available
+            definition = {'prompts': []}
+            prompt_def_file = prompts_def_dir / f'{set_name}.json'
+            if prompt_def_file.exists():
                 try:
-                    with open(prompt_file) as f:
+                    with open(prompt_def_file) as f:
                         definition = json.load(f)
                 except Exception:
-                    definition = {'prompts': []}
+                    pass
 
-                # Discover available IDs from raw/residual/{set}/
-                available_ids = []
-                set_raw_dir = raw_residual_dir / set_name
-                if set_raw_dir.exists():
-                    for pt_file in set_raw_dir.glob('*.pt'):
-                        # Parse ID from filename: "1.pt" -> 1
-                        try:
-                            prompt_id = int(pt_file.stem)
-                            available_ids.append(prompt_id)
-                        except ValueError:
-                            continue
-
-                prompt_sets.append({
-                    'name': set_name,
-                    'description': definition.get('description', ''),
-                    'prompts': definition.get('prompts', []),
-                    'available_ids': sorted(available_ids)
-                })
+            prompt_sets.append({
+                'name': set_name,
+                'description': definition.get('description', ''),
+                'prompts': definition.get('prompts', []),
+                'available_ids': sorted(discovered_sets.get(set_name, set()))
+            })
 
         return {'prompt_sets': sorted(prompt_sets, key=lambda x: x['name'])}
 
@@ -392,6 +515,9 @@ Available at:
   • http://localhost:{PORT}/                    (Dashboard - defaults to Overview tab)
   • http://localhost:{PORT}/?tab=data-explorer  (Data Explorer)
   • http://localhost:{PORT}/?tab=overview       (Overview documentation)
+  • http://localhost:{PORT}/analytics           (Page view analytics)
+
+Analytics file: {ANALYTICS_FILE}
 
 Press Ctrl+C to stop the server.
 """)
