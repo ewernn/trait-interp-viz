@@ -1,8 +1,8 @@
 [build]
-builder = "nixpacks"
+builder = "dockerfile"
 
 [deploy]
-startCommand = "python visualization/serve.py"
+# CMD is in Dockerfile
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 
