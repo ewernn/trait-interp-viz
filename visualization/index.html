@@ -65,11 +65,17 @@
             </div>
         </div> -->
 
+        <!-- Sidebar Toggle (mobile) -->
+        <button class="sidebar-toggle" id="sidebar-toggle" title="Toggle sidebar">☰</button>
+
         <!-- Sidebar -->
-        <div class="sidebar">
+        <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <div class="sidebar-title">Trait Interp</div>
-                <div class="sidebar-subtitle">Vector Visualization</div>
+                <div class="sidebar-header-content">
+                    <div class="sidebar-title">Trait Interp</div>
+                    <div class="sidebar-subtitle">Vector Visualization</div>
+                </div>
+                <button class="sidebar-collapse-btn" id="sidebar-collapse" title="Collapse sidebar">◀</button>
             </div>
 
             <div class="sidebar-section">
@@ -89,13 +95,17 @@
             <div class="sidebar-section">
                 <div class="section-title">Trait Development</div>
                 <div id="nav-items-extraction">
-                    <div class="nav-item" data-view="data-explorer">
+                    <!-- <div class="nav-item" data-view="data-explorer">
                         <span class="icon">🗂️</span>
                         <span>Data Explorer</span>
-                    </div>
+                    </div> -->
                     <div class="nav-item" data-view="trait-extraction">
                         <span class="icon">🔬</span>
                         <span>Trait Extraction</span>
+                    </div>
+                    <div class="nav-item" data-view="steering-sweep">
+                        <span class="icon">🎯</span>
+                        <span>Steering Sweep</span>
                     </div>
                 </div>
             </div>
@@ -103,9 +113,9 @@
             <div class="sidebar-section">
                 <div class="section-title">Inference Analysis</div>
                 <div id="nav-items-inference">
-                    <div class="nav-item" data-view="trait-trajectory">
-                        <span class="icon">⚡</span>
-                        <span>Trait Trajectory</span>
+                    <div class="nav-item" data-view="live-chat">
+                        <span class="icon">💬</span>
+                        <span>Live Chat</span>
                     </div>
                     <div class="nav-item" data-view="trait-dynamics">
                         <span class="icon">📈</span>
@@ -114,18 +124,6 @@
                     <div class="nav-item" data-view="layer-deep-dive">
                         <span class="icon">🔬</span>
                         <span>Layer Deep Dive</span>
-                    </div>
-                    <div class="nav-item" data-view="analysis-gallery">
-                        <span class="icon">🖼️</span>
-                        <span>Analysis Gallery</span>
-                    </div>
-                    <div class="nav-item" data-view="steering-sweep">
-                        <span class="icon">🎯</span>
-                        <span>Steering Sweep</span>
-                    </div>
-                    <div class="nav-item" data-view="multi-layer-heatmap">
-                        <span class="icon">🗺️</span>
-                        <span>Multi-Layer Heatmap</span>
                     </div>
                 </div>
             </div>
@@ -161,19 +159,19 @@
 
     <!-- Application Modules -->
     <script src="/visualization/core/paths.js"></script>
+    <script src="/visualization/core/model-config.js"></script>
     <script src="/visualization/core/state.js"></script>
     <script src="/visualization/core/prompt-picker.js"></script>
+    <script src="/visualization/core/conversation-tree.js"></script>
 
     <!-- View Modules -->
     <script src="/visualization/views/overview.js"></script>
     <script src="/visualization/views/data-explorer.js"></script>
     <script src="/visualization/views/trait-extraction.js"></script>
-    <script src="/visualization/views/trait-trajectory.js"></script>
     <script src="/visualization/views/trait-dynamics.js"></script>
     <script src="/visualization/views/layer-deep-dive.js"></script>
-    <script src="/visualization/views/analysis-gallery.js"></script>
     <script src="/visualization/views/steering-sweep.js"></script>
-    <script src="/visualization/views/multi-layer-heatmap.js"></script>
+    <script src="/visualization/views/live-chat.js"></script>
 
     <!-- View Router -->
     <script>
@@ -186,12 +184,10 @@
                 'overview': 'Overview',
                 'data-explorer': 'Data Explorer',
                 'trait-extraction': 'Trait Extraction',
-                'trait-trajectory': 'Trait Trajectory',
                 'trait-dynamics': 'Trait Dynamics',
                 'layer-deep-dive': 'Layer Deep Dive',
-                'analysis-gallery': 'Analysis Gallery',
                 'steering-sweep': 'Steering Sweep',
-                'multi-layer-heatmap': 'Multi-Layer Heatmap'
+                'live-chat': 'Live Chat'
             };
             document.getElementById('page-title').textContent = viewTitles[view] || 'Unknown View';
 
@@ -205,23 +201,17 @@
                 case 'trait-extraction':
                     window.renderTraitExtraction();
                     break;
-                case 'trait-trajectory':
-                    window.renderTraitTrajectory();
-                    break;
                 case 'trait-dynamics':
                     window.renderTraitDynamics();
                     break;
                 case 'layer-deep-dive':
                     window.renderLayerDeepDive();
                     break;
-                case 'analysis-gallery':
-                    window.renderAnalysisGallery();
-                    break;
                 case 'steering-sweep':
                     window.renderSteeringSweep();
                     break;
-                case 'multi-layer-heatmap':
-                    window.renderMultiLayerHeatmap();
+                case 'live-chat':
+                    window.renderLiveChat();
                     break;
                 default:
                     document.getElementById('content-area').innerHTML =
@@ -235,6 +225,34 @@
         } else {
             window.initApp();
         }
+
+        // Sidebar toggle functionality
+        document.addEventListener('DOMContentLoaded', () => {
+            const sidebar = document.getElementById('sidebar');
+            const collapseBtn = document.getElementById('sidebar-collapse');
+            const toggleBtn = document.getElementById('sidebar-toggle');
+
+            // Desktop collapse button
+            collapseBtn.addEventListener('click', () => {
+                sidebar.classList.toggle('collapsed');
+                collapseBtn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+            });
+
+            // Mobile toggle button
+            toggleBtn.addEventListener('click', () => {
+                sidebar.classList.toggle('mobile-open');
+            });
+
+            // Close mobile sidebar when clicking outside
+            document.addEventListener('click', (e) => {
+                if (window.innerWidth <= 768 &&
+                    sidebar.classList.contains('mobile-open') &&
+                    !sidebar.contains(e.target) &&
+                    e.target !== toggleBtn) {
+                    sidebar.classList.remove('mobile-open');
+                }
+            });
+        });
     </script>
 </body>
 </html>

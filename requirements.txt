@@ -1,2 +1,3 @@
 # Minimal dependencies for visualization server only
 PyYAML==6.0.2
+modal
