@@ -417,11 +417,31 @@ async function loadExperimentData(experimentName) {
         state.experimentData = {
             name: experimentName,
             traits: [],
-            readme: null
+            readme: null,
+            experimentConfig: null  // Will hold extraction_model, application_model
         };
-        
+
         // Correctly use the global path builder
         window.paths.setExperiment(experimentName);
+
+        // Load experiment config.json (extraction_model, application_model)
+        try {
+            const configResponse = await fetch(`/api/experiments/${experimentName}/config`);
+            if (configResponse.ok) {
+                state.experimentData.experimentConfig = await configResponse.json();
+                console.log(`Loaded experiment config:`, state.experimentData.experimentConfig);
+            }
+        } catch (e) {
+            console.warn(`No experiment config.json for ${experimentName}:`, e.message);
+        }
+
+        // Load model config for this experiment
+        try {
+            await window.modelConfig.loadForExperiment(experimentName);
+            console.log(`Loaded model config: ${window.modelConfig.modelId} (${window.modelConfig.getNumLayers()} layers)`);
+        } catch (e) {
+            console.warn(`No model config found for ${experimentName}:`, e.message);
+        }
 
         // Try to load README
         try {
@@ -523,7 +543,7 @@ async function discoverAvailablePrompts() {
         for (const ps of promptSets) {
             // Store prompt definitions
             state.availablePromptSets[ps.name] = ps.prompts || [];
-            // Store which IDs have data (discovered from raw/residual/)
+            // Store which IDs have data (discovered from projection JSONs or raw .pt files)
             state.promptsWithData[ps.name] = ps.available_ids || [];
         }
     } catch (e) {

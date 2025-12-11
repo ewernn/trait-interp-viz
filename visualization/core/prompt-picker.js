@@ -8,7 +8,7 @@
  */
 
 // Views that show the prompt picker
-const INFERENCE_VIEWS = ['trait-trajectory', 'trait-dynamics', 'layer-deep-dive', 'analysis-gallery'];
+const INFERENCE_VIEWS = ['trait-dynamics', 'layer-deep-dive', 'multi-layer-heatmap'];
 
 /**
  * Render the prompt picker panel.
@@ -34,14 +34,16 @@ async function renderPromptPicker() {
         return;
     }
 
-    // Build prompt picker HTML
-    let promptSetOptions = '';
+    // Build prompt set buttons
+    let promptSetButtons = '';
     for (const [setName, promptIds] of Object.entries(window.state.promptsWithData)) {
         if (promptIds.length === 0) continue;
-        const selected = setName === window.state.currentPromptSet ? 'selected' : '';
-        promptSetOptions += `<option value="${setName}" ${selected}>${setName.replace(/_/g, ' ')}</option>`;
+        const isActive = setName === window.state.currentPromptSet ? 'active' : '';
+        const displayName = setName.replace(/_/g, ' ');
+        promptSetButtons += `<button class="pp-btn pp-set-btn ${isActive}" data-set="${setName}">${displayName}</button>`;
     }
 
+    // Build prompt ID buttons
     const currentSetPromptIds = window.state.promptsWithData[window.state.currentPromptSet] || [];
     let promptBoxes = '';
     currentSetPromptIds.forEach(id => {
@@ -91,18 +93,38 @@ async function renderPromptPicker() {
         fetchPromptPickerData();
     }
 
+    // Check if previously collapsed
+    const isCollapsed = localStorage.getItem('promptPickerCollapsed') === 'true';
+    const collapsedClass = isCollapsed ? 'collapsed' : '';
+
     container.innerHTML = `
-        <div class="pp-header">Prompt Picker</div>
-        <div class="pp-picker">
-            <select id="prompt-set-select">${promptSetOptions}</select>
-            <div class="pp-prompts">${promptBoxes}</div>
-            ${promptNote ? `<span class="pp-note">${promptNote}</span>` : ''}
+        <div class="pp-pill" id="pp-pill">
+            <span class="pp-pill-icon">▲</span>
+            <span class="pp-pill-label">Prompt Picker</span>
+            <span class="pp-pill-summary">${window.state.currentPromptSet?.replace(/_/g, ' ') || ''} #${window.state.currentPromptId ?? ''}</span>
         </div>
-        <div class="pp-text">
-            <div><strong>Prompt:</strong> ${buildHighlightedText(tokenList, window.state.currentTokenIndex, 0, window.state.promptPickerCache?.nPromptTokens || 0, 300)}</div>
-            <div><strong>Response:</strong> ${buildHighlightedText(tokenList, window.state.currentTokenIndex, window.state.promptPickerCache?.nPromptTokens || 0, tokenList.length, 300)}</div>
+        <div class="pp-expanded ${collapsedClass}" id="pp-expanded">
+            <div class="pp-header">
+                <span>Prompt Picker</span>
+                <button class="pp-collapse-btn" id="pp-collapse-btn" title="Collapse">▼</button>
+            </div>
+            <div class="pp-picker">
+                <div class="pp-row">
+                    <span class="pp-row-label">Set:</span>
+                    <div class="pp-sets">${promptSetButtons}</div>
+                </div>
+                <div class="pp-row">
+                    <span class="pp-row-label">Prompt:</span>
+                    <div class="pp-prompts">${promptBoxes}</div>
+                    ${promptNote ? `<span class="pp-note">${promptNote}</span>` : ''}
+                </div>
+            </div>
+            <div class="pp-text">
+                <div><strong>Prompt:</strong> ${buildHighlightedText(tokenList, window.state.currentTokenIndex, 0, window.state.promptPickerCache?.nPromptTokens || 0, 300)}</div>
+                <div><strong>Response:</strong> ${buildHighlightedText(tokenList, window.state.currentTokenIndex, window.state.promptPickerCache?.nPromptTokens || 0, tokenList.length, 300)}</div>
+            </div>
+            ${tokenSliderHtml}
         </div>
-        ${tokenSliderHtml}
     `;
 
     // Re-attach event listeners
@@ -110,53 +132,70 @@ async function renderPromptPicker() {
 }
 
 /**
- * Fetch prompt/response data from first available trait and cache it.
+ * Fetch prompt/response data and cache it.
+ * Tries shared response data first, falls back to projection data for backwards compatibility.
  */
 async function fetchPromptPickerData() {
     if (!window.state.currentPromptSet || !window.state.currentPromptId) return;
-    if (!window.state.experimentData || !window.state.experimentData.traits || window.state.experimentData.traits.length === 0) return;
 
-    const firstTrait = window.state.experimentData.traits[0];
+    let data = null;
 
+    // Try shared response data first (new format)
     try {
-        const url = window.paths.residualStreamData(firstTrait, window.state.currentPromptSet, window.state.currentPromptId);
-        const response = await fetch(url);
-        if (!response.ok) return;
-
-        const data = await response.json();
-
-        const promptTokenList = data.prompt?.tokens || [];
-        const responseTokenList = data.response?.tokens || [];
-        const allTokens = [...promptTokenList, ...responseTokenList];
-
-        window.state.promptPickerCache = {
-            promptSet: window.state.currentPromptSet,
-            promptId: window.state.currentPromptId,
-            promptText: data.prompt?.text || '',
-            responseText: data.response?.text || '',
-            promptTokens: promptTokenList.length,
-            responseTokens: responseTokenList.length,
-            allTokens: allTokens,
-            nPromptTokens: promptTokenList.length
-        };
-
-        // Reset token index when loading new prompt (clamp to valid range)
-        const maxIdx = Math.max(0, allTokens.length - 1);
-        window.state.currentTokenIndex = Math.min(window.state.currentTokenIndex, maxIdx);
-
-        // Re-render with the fetched data
-        renderPromptPicker();
-
-        // Resize all Plotly charts after prompt picker layout change
-        // This fixes the first-trait-not-full-width bug on initial load
-        requestAnimationFrame(() => {
-            document.querySelectorAll('.js-plotly-plot').forEach(plot => {
-                Plotly.Plots.resize(plot);
-            });
-        });
+        const responseUrl = window.paths.responseData(window.state.currentPromptSet, window.state.currentPromptId);
+        const response = await fetch(responseUrl);
+        if (response.ok) {
+            data = await response.json();
+        }
     } catch (e) {
-        console.warn('Failed to fetch prompt picker data:', e);
+        // Fall through to fallback
     }
+
+    // Fall back to projection data (old format, for backwards compatibility)
+    if (!data && window.state.experimentData?.traits?.length > 0) {
+        const firstTrait = window.state.experimentData.traits[0];
+        try {
+            const url = window.paths.residualStreamData(firstTrait, window.state.currentPromptSet, window.state.currentPromptId);
+            const response = await fetch(url);
+            if (response.ok) {
+                data = await response.json();
+            }
+        } catch (e) {
+            console.warn('Failed to fetch prompt picker data:', e);
+        }
+    }
+
+    if (!data) return;
+
+    const promptTokenList = data.prompt?.tokens || [];
+    const responseTokenList = data.response?.tokens || [];
+    const allTokens = [...promptTokenList, ...responseTokenList];
+
+    window.state.promptPickerCache = {
+        promptSet: window.state.currentPromptSet,
+        promptId: window.state.currentPromptId,
+        promptText: data.prompt?.text || '',
+        responseText: data.response?.text || '',
+        promptTokens: promptTokenList.length,
+        responseTokens: responseTokenList.length,
+        allTokens: allTokens,
+        nPromptTokens: promptTokenList.length
+    };
+
+    // Reset token index when loading new prompt (clamp to valid range)
+    const maxIdx = Math.max(0, allTokens.length - 1);
+    window.state.currentTokenIndex = Math.min(window.state.currentTokenIndex, maxIdx);
+
+    // Re-render with the fetched data
+    renderPromptPicker();
+
+    // Resize all Plotly charts after prompt picker layout change
+    // This fixes the first-trait-not-full-width bug on initial load
+    requestAnimationFrame(() => {
+        document.querySelectorAll('.js-plotly-plot').forEach(plot => {
+            Plotly.Plots.resize(plot);
+        });
+    });
 }
 
 /**
@@ -166,11 +205,29 @@ function setupPromptPickerListeners() {
     const container = document.getElementById('prompt-picker');
     if (!container) return;
 
-    // Prompt set dropdown
-    const setSelect = container.querySelector('#prompt-set-select');
-    if (setSelect) {
-        setSelect.addEventListener('change', (e) => {
-            const newSet = e.target.value;
+    // Pill click to expand
+    const pill = container.querySelector('#pp-pill');
+    const expanded = container.querySelector('#pp-expanded');
+    if (pill && expanded) {
+        pill.addEventListener('click', () => {
+            expanded.classList.remove('collapsed');
+            localStorage.setItem('promptPickerCollapsed', 'false');
+        });
+    }
+
+    // Collapse button
+    const collapseBtn = container.querySelector('#pp-collapse-btn');
+    if (collapseBtn && expanded) {
+        collapseBtn.addEventListener('click', () => {
+            expanded.classList.add('collapsed');
+            localStorage.setItem('promptPickerCollapsed', 'true');
+        });
+    }
+
+    // Prompt set buttons
+    container.querySelectorAll('.pp-set-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const newSet = btn.dataset.set;
             if (window.state.currentPromptSet !== newSet) {
                 window.state.currentPromptSet = newSet;
                 const availableIds = window.state.promptsWithData[newSet] || [];
@@ -183,10 +240,10 @@ function setupPromptPickerListeners() {
                 if (window.renderView) window.renderView();
             }
         });
-    }
+    });
 
-    // Prompt ID buttons
-    container.querySelectorAll('.pp-btn').forEach(box => {
+    // Prompt ID buttons (exclude set buttons)
+    container.querySelectorAll('.pp-prompts .pp-btn').forEach(box => {
         box.addEventListener('click', () => {
             const promptId = parseInt(box.dataset.promptId);
             if (window.state.currentPromptId !== promptId && !isNaN(promptId)) {
@@ -249,22 +306,7 @@ function updatePlotTokenHighlights(tokenIdx, nPromptTokens) {
     const primaryColor = window.getCssVar('--primary-color', '#a09f6c');
     const textSecondary = window.getCssVar('--text-secondary', '#a4a4a4');
 
-    if (window.state.currentView === 'trait-trajectory') {
-        // Update all trait heatmaps
-        const filteredTraits = window.getFilteredTraits();
-        for (const trait of filteredTraits) {
-            const traitId = trait.name.replace(/\//g, '-');
-            const plotDiv = document.getElementById(`trajectory-heatmap-${traitId}`);
-            if (plotDiv && plotDiv.data) {
-                Plotly.relayout(plotDiv, {
-                    shapes: [
-                        { type: 'line', xref: 'x', yref: 'paper', x0: separatorX, x1: separatorX, y0: 0, y1: 1, line: { color: separatorColor, width: 2, dash: 'dash' } },
-                        { type: 'rect', xref: 'x', yref: 'paper', x0: highlightX - 0.5, x1: highlightX + 0.5, y0: 0, y1: 1, fillcolor: highlightColor, line: { width: 0 } }
-                    ]
-                });
-            }
-        }
-    } else if (window.state.currentView === 'trait-dynamics') {
+    if (window.state.currentView === 'trait-dynamics') {
         // Update combined activation plot
         const plotDiv = document.getElementById('combined-activation-plot');
         if (plotDiv && plotDiv.data) {
@@ -274,11 +316,6 @@ function updatePlotTokenHighlights(tokenIdx, nPromptTokens) {
                     { type: 'line', x0: highlightX, x1: highlightX, y0: 0, y1: 1, yref: 'paper', line: { color: primaryColor, width: 2 } }
                 ]
             });
-        }
-    } else if (window.state.currentView === 'analysis-gallery') {
-        // Analysis Gallery needs full re-render with new token data (data is cached)
-        if (window.renderAnalysisGallery) {
-            window.renderAnalysisGallery();
         }
     } else if (window.state.currentView === 'layer-deep-dive') {
         // Layer Deep Dive needs full re-render for new token's SAE features
