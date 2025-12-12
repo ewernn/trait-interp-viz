@@ -63,8 +63,8 @@ The visualization dashboard is organized into two main categories, reflecting th
     - **Hover interactions**: Hover over messages to highlight their token region in the chart
     - **Message regions**: Blue vertical lines mark user turns, green shaded areas show assistant responses
     - **3-token running average**: Toggle between raw and smoothed line (checkbox in chart header)
-    - **Inference backends**: Supports local (Mac/GPU) or Modal (cloud GPU). Set via `INFERENCE_BACKEND=modal` env var
-    - Model loads lazily on first request (~10-30s local, ~18s Modal cold start with volume cache)
+    - **Inference backends**: Supports local (Mac/GPU) or Modal (cloud GPU, streaming). Set via `INFERENCE_BACKEND=modal` env var
+    - **Streaming**: Tokens appear as generated (~0.2s each). First token: 10-30s local, 10s Modal (volume-cached)
 
 All other inference views share a **prompt picker** fixed at the bottom of the page:
 - **Prompt picker**: Dropdown to select prompt set (`single_trait`, `dynamic`, etc.) + numbered boxes for prompt IDs

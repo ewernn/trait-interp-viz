@@ -26,12 +26,15 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import torch
 import os
-from typing import Dict, Generator, List, Optional, Tuple
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from typing import Dict, Generator, List, Optional, Tuple, TYPE_CHECKING
 
-from traitlens import HookManager, projection
+# Lazy imports for heavy dependencies
+if TYPE_CHECKING:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from traitlens import projection
 from utils.paths import get as get_path
 from utils.vectors import get_best_layer
 from utils.model import format_prompt, load_experiment_config
@@ -52,7 +55,7 @@ class ChatInference:
         self.backend = backend
         self.model = None
         self.tokenizer = None
-        self.trait_vectors: Dict[str, Tuple[torch.Tensor, int]] = {}  # trait -> (vector, layer)
+        self.trait_vectors: Dict[str, Tuple['torch.Tensor', int]] = {}  # trait -> (vector, layer)
         self.n_layers = None
         self.use_chat_template = None
         self._loaded = False
@@ -69,9 +72,10 @@ class ChatInference:
 
         if self.backend == "modal":
             print(f"[ChatInference] Using Modal backend for model: {model_id}")
-            # Import modal here (optional dependency)
+            # Import modal and transformers (lazy)
             try:
                 import modal
+                from transformers import AutoTokenizer
                 # Look up deployed app
                 self._modal_app = modal.App.lookup("trait-capture", create_if_missing=False)
                 self._model_id = model_id
@@ -86,6 +90,10 @@ class ChatInference:
                 raise RuntimeError(f"Failed to connect to Modal: {e}. Make sure 'trait-capture' is deployed.") from e
         else:
             print(f"[ChatInference] Loading model locally: {model_id}")
+            # Import torch and transformers (lazy)
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 torch_dtype=torch.float16,
@@ -116,6 +124,8 @@ class ChatInference:
 
     def _load_trait_vectors(self):
         """Discover and load all trait vectors with their best layers."""
+        import torch  # Lazy import
+
         extraction_dir = get_path('extraction.base', experiment=self.experiment)
         if not extraction_dir.exists():
             print(f"[ChatInference] No extraction dir: {extraction_dir}")
@@ -225,6 +235,9 @@ class ChatInference:
             return
 
         # Local backend continues below
+        import torch  # Lazy import
+        from traitlens import HookManager
+
         input_ids = self.tokenizer(formatted_prompt, return_tensors="pt").input_ids.to(self.model.device)
 
         # Group traits by layer for efficient hooking
@@ -360,6 +373,8 @@ class ChatInference:
         Modal yields tokens + activations one at a time, we project and stream
         to browser immediately.
         """
+        import torch  # Lazy import
+
         print(f"[ChatInference] Calling Modal streaming API...")
         yield {'status': 'calling_modal', 'message': 'Calling Modal GPU...'}
 
