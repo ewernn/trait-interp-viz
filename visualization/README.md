@@ -63,7 +63,11 @@ The visualization dashboard is organized into two main categories, reflecting th
     - **Hover interactions**: Hover over messages to highlight their token region in the chart
     - **Message regions**: Blue vertical lines mark user turns, green shaded areas show assistant responses
     - **3-token running average**: Toggle between raw and smoothed line (checkbox in chart header)
-    - **Inference backends**: Supports local (Mac/GPU) or Modal (cloud GPU, streaming). Set via `INFERENCE_BACKEND=modal` env var
+    - **Inference backends**: Supports local (Mac/GPU) or Modal (cloud GPU, streaming)
+        - Local (default): Model loads on Mac/GPU, generates locally
+        - Modal: GPU inference on Modal (T4), Railway projects vectors locally
+        - Set backend: `INFERENCE_BACKEND=modal` env var (Railway) or `backend='modal'` param
+        - Deploy Modal: `modal deploy inference/modal_inference.py` (one-time setup)
     - **Streaming**: Tokens appear as generated (~0.2s each). First token: 10-30s local, 10s Modal (volume-cached)
 
 All other inference views share a **prompt picker** fixed at the bottom of the page:
