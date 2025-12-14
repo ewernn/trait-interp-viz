@@ -58,6 +58,7 @@ The visualization dashboard is organized into two main categories, reflecting th
 (Using your best vectors to see what the model is "thinking" on new prompts)
 
 -   **Live Chat**: Interactive chat with real-time trait monitoring.
+    - **Model selection**: Dropdown to switch between `extraction_model` (base) and `application_model` (instruct-tuned) from experiment config. Clears chat when switching models.
     - **Multi-turn conversation**: Chart accumulates all tokens across messages (doesn't reset per message)
     - **Conversation branching**: Edit any user message to create alternate conversation branches; navigate with `◀ 1/2 ▶` arrows
     - **Hover interactions**: Hover over messages to highlight their token region in the chart

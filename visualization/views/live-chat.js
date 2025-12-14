@@ -29,6 +29,28 @@ let hoveredMessageId = null;
 let showSmoothedLine = true;
 let includePromptTokens = false;
 let editingNodeId = null;
+let currentModelType = 'application';  // 'application' or 'extraction'
+let modelNames = { application: null, extraction: null };  // Loaded from config
+
+/**
+ * Load model names from experiment config
+ */
+async function loadModelNames() {
+    const experiment = window.state.currentExperiment;
+    if (!experiment) return;
+
+    try {
+        const response = await fetch(`/api/experiments/${experiment}/config`);
+        const config = await response.json();
+
+        modelNames.application = config.application_model || 'google/gemma-2-2b-it';
+        modelNames.extraction = config.extraction_model || 'google/gemma-2-2b';
+    } catch (e) {
+        console.error('Failed to load model config:', e);
+        modelNames.application = 'application';
+        modelNames.extraction = 'extraction';
+    }
+}
 
 /**
  * Render the live chat view
@@ -41,6 +63,9 @@ async function renderLiveChat() {
     if (!conversationTree) {
         conversationTree = new window.ConversationTree();
     }
+
+    // Load model names from config
+    await loadModelNames();
 
     // If already rendered with conversation, just update chart (don't rebuild UI)
     const existingView = container.querySelector('.live-chat-view');
@@ -57,6 +82,17 @@ async function renderLiveChat() {
                     <div class="chart-header">
                         <h3>Trait Dynamics</h3>
                         <div class="chart-controls">
+                            <label class="model-picker">
+                                <span class="model-label">Model:</span>
+                                <select id="model-select">
+                                    <option value="application" ${currentModelType === 'application' ? 'selected' : ''}>
+                                        ${modelNames.application || 'Loading...'}
+                                    </option>
+                                    <option value="extraction" ${currentModelType === 'extraction' ? 'selected' : ''}>
+                                        ${modelNames.extraction || 'Loading...'}
+                                    </option>
+                                </select>
+                            </label>
                             <label class="smooth-toggle">
                                 <input type="checkbox" id="smooth-toggle" ${showSmoothedLine ? 'checked' : ''}>
                                 <span>3-token avg</span>
@@ -341,7 +377,34 @@ function addLiveChatStyles() {
         .chart-controls {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
+        }
+
+        .model-picker {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: var(--text-xs);
+            color: var(--text-secondary);
+        }
+
+        .model-label {
+            font-weight: 500;
+        }
+
+        .model-picker select {
+            padding: 3px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: var(--text-xs);
+            cursor: pointer;
+            max-width: 200px;
+        }
+
+        .model-picker select:hover {
+            border-color: var(--primary-color);
         }
 
         .smooth-toggle, .prompt-toggle {
@@ -414,6 +477,7 @@ function setupChatHandlers() {
     const input = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
     const clearBtn = document.getElementById('clear-btn');
+    const modelSelect = document.getElementById('model-select');
     const smoothToggle = document.getElementById('smooth-toggle');
     const promptToggle = document.getElementById('prompt-toggle');
 
@@ -431,6 +495,15 @@ function setupChatHandlers() {
         }
     });
 
+    if (modelSelect) {
+        modelSelect.addEventListener('change', (e) => {
+            currentModelType = e.target.value;
+            console.log(`[LiveChat] Switched to ${currentModelType} model: ${modelNames[currentModelType]}`);
+            // Clear chat when switching models (different model = new conversation)
+            clearChat();
+        });
+    }
+
     if (smoothToggle) {
         smoothToggle.addEventListener('change', (e) => {
             showSmoothedLine = e.target.checked;
@@ -441,7 +514,7 @@ function setupChatHandlers() {
     if (promptToggle) {
         promptToggle.addEventListener('change', (e) => {
             includePromptTokens = e.target.checked;
-            // Note: This will affect next message only (doesn't retroactively add prompt tokens)
+            updateTraitChart();  // Instantly filter chart display
         });
     }
 }
@@ -545,11 +618,12 @@ async function generateResponse(prompt, assistantNodeId) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 prompt: prompt,
-                experiment: window.state.currentExperiment || 'gemma-2-2b-it',
+                experiment: window.state.currentExperiment,
                 max_tokens: 100,
                 temperature: 0.7,
                 history: history,
-                include_prompt: includePromptTokens
+                include_prompt: includePromptTokens,
+                model_type: currentModelType
             })
         });
 
@@ -593,13 +667,16 @@ async function generateResponse(prompt, assistantNodeId) {
                             break;
                         }
 
-                        responseText += event.token;
+                        // Only add non-prompt tokens to displayed response
+                        if (!event.is_prompt) {
+                            responseText += event.token;
 
-                        // Update node content for display
-                        const node = conversationTree.getNode(assistantNodeId);
-                        if (node) node.content = responseText;
+                            // Update node content for display
+                            const node = conversationTree.getNode(assistantNodeId);
+                            if (node) node.content = responseText;
+                        }
 
-                        // Append token to conversation tree
+                        // Append ALL tokens to conversation tree (for chart)
                         conversationTree.appendToken(assistantNodeId, event);
 
                         // Update UI
@@ -697,16 +774,25 @@ function handleMessageHover(messageId) {
 function renderTokenizedContent(node) {
     if (!node.content) return '';
 
-    // For assistant messages with token events, render as spans
+    // For assistant messages with token events, render as spans (enables hover highlighting)
+    // Note: Markdown that spans tokens won't render correctly in this mode
     if (node.role === 'assistant' && node.tokenEvents && node.tokenEvents.length > 0) {
         return node.tokenEvents.map((event, idx) => {
+            // Skip prompt tokens from display (but keep global index correct for hover)
+            if (event.is_prompt) return '';
             const globalTokenIdx = node.tokenStartIdx + idx;
             const tokenText = window.escapeHtml(event.token);
             return `<span class="token-span" data-token-idx="${globalTokenIdx}">${tokenText}</span>`;
         }).join('');
     }
 
-    // For user messages or assistant messages without tokens, just escape
+    // For user messages or assistant messages without tokens, render with markdown
+    if (typeof marked !== 'undefined') {
+        // Configure marked for inline rendering (no <p> wrapper for single lines)
+        const rendered = marked.parse(node.content, { breaks: true });
+        // Strip wrapping <p> tags for cleaner inline display
+        return rendered.replace(/^<p>|<\/p>\n?$/g, '');
+    }
     return window.escapeHtml(node.content);
 }
 
@@ -888,12 +974,13 @@ function updateTraitChart() {
             return scores;
         };
 
-        // Add prompt tokens trace (dotted line)
-        if (promptIndices.length > 0) {
+        // Add prompt tokens trace (dotted line) - only when checkbox enabled
+        if (includePromptTokens && promptIndices.length > 0) {
             traces.push({
                 name: `${trait} (prompt)`,
                 x: promptIndices,
                 y: getY(promptIndices, promptScores),
+                customdata: promptIndices,  // Original indices for hover
                 type: 'scatter',
                 mode: 'lines',
                 line: { color: color, width: 1.5, dash: 'dot' },
@@ -905,10 +992,16 @@ function updateTraitChart() {
 
         // Add response tokens trace (solid line)
         if (responseIndices.length > 0) {
+            // When not showing prompt, re-index response to start at 0 for display
+            // but keep original indices in customdata for hover highlighting
+            const xValues = includePromptTokens
+                ? responseIndices
+                : responseIndices.map((_, i) => i);
             traces.push({
                 name: trait,
-                x: responseIndices,
+                x: xValues,
                 y: getY(responseIndices, responseScores),
+                customdata: responseIndices,  // Original indices for hover
                 type: 'scatter',
                 mode: 'lines',
                 line: { color: color, width: 2 },
@@ -949,7 +1042,11 @@ function updateTraitChart() {
     if (!chartDiv._tokenHoverAttached) {
         chartDiv.on('plotly_hover', (data) => {
             if (data.points && data.points.length > 0) {
-                const tokenIdx = Math.round(data.points[0].x);
+                const point = data.points[0];
+                // Use customdata (original index) if available, else x
+                const tokenIdx = point.customdata !== undefined
+                    ? point.customdata
+                    : Math.round(point.x);
                 highlightTokenInChat(tokenIdx);
             }
         });

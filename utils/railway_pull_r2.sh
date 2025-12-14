@@ -1,7 +1,7 @@
 #!/bin/bash
 # Download experiments from R2 to Railway volume
 # Usage: railway run bash utils/railway_pull_r2.sh [experiment_name]
-# Example: railway run bash utils/railway_pull_r2.sh gemma-2-2b-it
+# Example: railway run bash utils/railway_pull_r2.sh {experiment}
 
 set -e
 

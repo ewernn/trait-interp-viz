@@ -21,6 +21,10 @@ const TRAIT_COLORS = [
     '#a9e34b',  // lime
 ];
 
+// Tokens to skip: BOS (0) + undifferentiated warmup tokens (1)
+// Early tokens have uniform activations across prompts - not informative
+const START_TOKEN_IDX = 2;
+
 /**
  * Setup click handlers for subsection info toggles (► triangles)
  */
@@ -333,7 +337,6 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
     setupSubsectionInfoToggles();
 
     // Prepare data for plotting
-    const startIdx = 1;  // Skip BOS token
     const traitActivations = {};  // Store smoothed activations for velocity/accel
 
     // Prepare traces for Token Trajectory
@@ -345,14 +348,15 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
         const responseProj = data.projections.response;
         const allProj = [...promptProj, ...responseProj];
         const nLayers = promptProj[0].length;
+        const nSublayers = promptProj[0][0].length;
 
         // Calculate activation strength for each token (average across all layers and sublayers)
         const rawActivations = [];
-        for (let t = startIdx; t < allProj.length; t++) {
+        for (let t = START_TOKEN_IDX; t < allProj.length; t++) {
             let sum = 0;
             let count = 0;
             for (let l = 0; l < nLayers; l++) {
-                for (let s = 0; s < 3; s++) {
+                for (let s = 0; s < nSublayers; s++) {
                     sum += allProj[t][l][s];
                     count++;
                 }
@@ -379,7 +383,7 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
     });
 
     // Get display tokens (every 10th for x-axis labels)
-    const displayTokens = allTokens.slice(startIdx);
+    const displayTokens = allTokens.slice(START_TOKEN_IDX);
     const tickVals = [];
     const tickText = [];
     for (let i = 0; i < displayTokens.length; i += 10) {
@@ -393,14 +397,14 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
 
     // Current token highlight
     const currentTokenIdx = window.state.currentTokenIndex || 0;
-    const highlightX = currentTokenIdx - startIdx;
+    const highlightX = Math.max(0, currentTokenIdx - START_TOKEN_IDX);
 
     // Shapes for prompt/response separator and token highlight
     const shapes = [
         {
             type: 'line',
-            x0: (nPromptTokens - startIdx) - 0.5,
-            x1: (nPromptTokens - startIdx) - 0.5,
+            x0: (nPromptTokens - START_TOKEN_IDX) - 0.5,
+            x1: (nPromptTokens - START_TOKEN_IDX) - 0.5,
             y0: 0, y1: 1, yref: 'paper',
             line: { color: textSecondary, width: 2, dash: 'dash' }
         },
@@ -414,13 +418,13 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
 
     const annotations = [
         {
-            x: (nPromptTokens - startIdx) / 2 - 0.5,
+            x: (nPromptTokens - START_TOKEN_IDX) / 2 - 0.5,
             y: 1.08, yref: 'paper',
             text: 'PROMPT', showarrow: false,
             font: { size: 11, color: textSecondary }
         },
         {
-            x: (nPromptTokens - startIdx) + (displayTokens.length - (nPromptTokens - startIdx)) / 2 - 0.5,
+            x: (nPromptTokens - START_TOKEN_IDX) + (displayTokens.length - (nPromptTokens - START_TOKEN_IDX)) / 2 - 0.5,
             y: 1.08, yref: 'paper',
             text: 'RESPONSE', showarrow: false,
             font: { size: 11, color: textSecondary }
@@ -460,7 +464,7 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
     );
     plotDiv.on('plotly_unhover', () => Plotly.restyle(plotDiv, {'opacity': 1.0}));
     plotDiv.on('plotly_click', (d) => {
-        const tokenIdx = Math.round(d.points[0].x) + startIdx;
+        const tokenIdx = Math.round(d.points[0].x) + START_TOKEN_IDX;
         if (window.state.currentTokenIndex !== tokenIdx) {
             window.state.currentTokenIndex = tokenIdx;
             window.renderPromptPicker?.();
@@ -469,7 +473,7 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
     });
 
     // Render Token Velocity and Acceleration plots
-    renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, tickText, nPromptTokens, startIdx);
+    renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, tickText, nPromptTokens);
 
     // Render Layer derivative plots (position, velocity, acceleration) - compact
     renderLayerDerivativePlots(traitData, loadedTraits);
@@ -485,11 +489,11 @@ function renderCombinedGraph(container, traitData, loadedTraits, failedTraits, p
 /**
  * Render Token Velocity and Token Acceleration plots (derivatives of smoothed trajectory)
  */
-function renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, tickText, nPromptTokens, startIdx) {
+function renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, tickText, nPromptTokens) {
     const textSecondary = window.getCssVar('--text-secondary', '#a4a4a4');
     const primaryColor = window.getCssVar('--primary-color', '#a09f6c');
     const currentTokenIdx = window.state.currentTokenIndex || 0;
-    const highlightX = currentTokenIdx - startIdx;
+    const highlightX = Math.max(0, currentTokenIdx - START_TOKEN_IDX);
 
     // Velocity traces
     const velocityTraces = [];
@@ -531,7 +535,7 @@ function renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, ti
     });
 
     const shapes = [
-        { type: 'line', x0: (nPromptTokens - startIdx) - 0.5, x1: (nPromptTokens - startIdx) - 0.5,
+        { type: 'line', x0: (nPromptTokens - START_TOKEN_IDX) - 0.5, x1: (nPromptTokens - START_TOKEN_IDX) - 0.5,
           y0: 0, y1: 1, yref: 'paper', line: { color: textSecondary, width: 1, dash: 'dash' } },
         { type: 'line', x0: highlightX, x1: highlightX,
           y0: 0, y1: 1, yref: 'paper', line: { color: primaryColor, width: 2 } }
@@ -563,7 +567,7 @@ function renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, ti
     const accelPlot = document.getElementById('token-acceleration-plot');
 
     velocityPlot.on('plotly_click', (d) => {
-        const tokenIdx = Math.round(d.points[0].x) + startIdx;
+        const tokenIdx = Math.round(d.points[0].x) + START_TOKEN_IDX;
         if (window.state.currentTokenIndex !== tokenIdx) {
             window.state.currentTokenIndex = tokenIdx;
             window.renderPromptPicker?.();
@@ -572,7 +576,7 @@ function renderTokenDerivativePlots(traitActivations, loadedTraits, tickVals, ti
     });
 
     accelPlot.on('plotly_click', (d) => {
-        const tokenIdx = Math.round(d.points[0].x) + startIdx;
+        const tokenIdx = Math.round(d.points[0].x) + START_TOKEN_IDX;
         if (window.state.currentTokenIndex !== tokenIdx) {
             window.state.currentTokenIndex = tokenIdx;
             window.renderPromptPicker?.();
@@ -713,21 +717,24 @@ function renderLayerTokenHeatmaps(traitData, loadedTraits, allTokens, nPromptTok
         const allProj = [...promptProj, ...responseProj];
 
         const nLayers = promptProj[0].length;
-        const startIdx = 1;  // Skip BOS
+        const nSublayers = promptProj[0][0].length;
 
         // Average over sublayers to get [n_tokens, n_layers]
         const layerAvg = [];
-        for (let t = startIdx; t < allProj.length; t++) {
-            layerAvg[t - startIdx] = [];
+        for (let t = START_TOKEN_IDX; t < allProj.length; t++) {
+            layerAvg[t - START_TOKEN_IDX] = [];
             for (let l = 0; l < nLayers; l++) {
-                const avg = (allProj[t][l][0] + allProj[t][l][1] + allProj[t][l][2]) / 3;
-                layerAvg[t - startIdx][l] = avg;
+                let sum = 0;
+                for (let s = 0; s < nSublayers; s++) {
+                    sum += allProj[t][l][s];
+                }
+                layerAvg[t - START_TOKEN_IDX][l] = sum / nSublayers;
             }
         }
 
         // Transpose for heatmap: [n_layers, n_tokens]
         const heatmapData = [];
-        const nDisplayTokens = allProj.length - startIdx;
+        const nDisplayTokens = allProj.length - START_TOKEN_IDX;
         for (let l = 0; l < nLayers; l++) {
             heatmapData[l] = [];
             for (let t = 0; t < nDisplayTokens; t++) {

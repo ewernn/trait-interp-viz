@@ -12,10 +12,10 @@ Usage:
     from visualization.chat_inference import ChatInference
 
     # Local inference
-    chat = ChatInference(experiment='gemma-2-2b-it', backend='local')
+    chat = ChatInference(experiment='{experiment}', backend='local')
 
     # Modal inference (Railway)
-    chat = ChatInference(experiment='gemma-2-2b-it', backend='modal')
+    chat = ChatInference(experiment='{experiment}', backend='modal')
 
     for event in chat.generate("How do I hack a computer?"):
         # event = {'token': '...', 'trait_scores': {'refusal': 0.5, ...}}
@@ -43,16 +43,18 @@ from utils.model import format_prompt, load_experiment_config
 class ChatInference:
     """Manages model and trait vectors for live chat with trait monitoring."""
 
-    def __init__(self, experiment: str, device: str = "auto", backend: str = "local"):
+    def __init__(self, experiment: str, device: str = "auto", backend: str = "local", model_type: str = "application"):
         """
         Args:
             experiment: Experiment name
             device: Device for local inference ("auto", "cuda", "mps", "cpu")
             backend: Inference backend - "local" or "modal"
+            model_type: Which model from config to use - "extraction" or "application" (default)
         """
         self.experiment = experiment
         self.device = device
         self.backend = backend
+        self.model_type = model_type
         self.model = None
         self.tokenizer = None
         self.trait_vectors: Dict[str, Tuple['torch.Tensor', int]] = {}  # trait -> (vector, layer)
@@ -66,9 +68,12 @@ class ChatInference:
         if self._loaded:
             return
 
-        # Get model from experiment config
+        # Get model from experiment config based on model_type
         config = load_experiment_config(self.experiment)
-        model_id = config.get('application_model', 'google/gemma-2-2b-it')
+        config_key = f'{self.model_type}_model'
+        fallback = 'google/gemma-2-2b-it' if self.model_type == 'application' else 'google/gemma-2-2b'
+        model_id = config.get(config_key, fallback)
+        print(f"[ChatInference] Using {self.model_type} model: {model_id}")
 
         if self.backend == "modal":
             print(f"[ChatInference] Using Modal backend for model: {model_id}")
@@ -126,9 +131,11 @@ class ChatInference:
         """Discover and load all trait vectors with their best layers."""
         import torch  # Lazy import
 
+        print(f"[ChatInference] _load_trait_vectors() called for experiment={self.experiment}", flush=True)
         extraction_dir = get_path('extraction.base', experiment=self.experiment)
+        print(f"[ChatInference] Extraction dir: {extraction_dir}", flush=True)
         if not extraction_dir.exists():
-            print(f"[ChatInference] No extraction dir: {extraction_dir}")
+            print(f"[ChatInference] ERROR: Extraction dir does not exist!", flush=True)
             return
 
         for category_dir in sorted(extraction_dir.iterdir()):
@@ -189,7 +196,7 @@ class ChatInference:
             max_new_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             history: Optional chat history [{"role": "user/assistant", "content": "..."}]
-            include_prompt: If True, also yield trait scores for prompt tokens
+            include_prompt: Deprecated, ignored. Prompt tokens always included (frontend filters display)
 
         Yields:
             Dict with 'token', 'trait_scores', 'done' keys
@@ -260,59 +267,67 @@ class ChatInference:
                 activations[layer_idx] = out_t.detach()  # [batch, seq, hidden]
             return hook
 
-        # If requested, process and yield prompt tokens first
-        if include_prompt:
-            # Run forward pass through prompt to get per-token activations
-            with HookManager(self.model) as hooks:
-                for layer in layers_needed:
-                    hooks.add_forward_hook(f"model.layers.{layer}", make_full_hook(layer))
+        # Always process and yield prompt tokens first (frontend filters display)
+        # Run forward pass through prompt to get per-token activations
+        with HookManager(self.model) as hooks:
+            for layer in layers_needed:
+                hooks.add_forward_hook(f"model.layers.{layer}", make_full_hook(layer))
 
-                with torch.no_grad():
-                    _ = self.model(input_ids=input_ids, return_dict=True)
+            with torch.no_grad():
+                _ = self.model(input_ids=input_ids, return_dict=True)
 
-            # Decode and score each prompt token
-            prompt_token_ids = input_ids[0].tolist()
-            for pos in range(len(prompt_token_ids)):
-                token_id = prompt_token_ids[pos]
-                token_str = self.tokenizer.decode([token_id], skip_special_tokens=True)
+        # Decode and score each prompt token
+        prompt_token_ids = input_ids[0].tolist()
+        for pos in range(len(prompt_token_ids)):
+            token_id = prompt_token_ids[pos]
+            token_str = self.tokenizer.decode([token_id], skip_special_tokens=True)
 
-                # Skip empty tokens (special tokens filtered out)
-                if not token_str:
-                    continue
+            # Skip empty tokens (special tokens filtered out)
+            if not token_str:
+                continue
 
-                # Compute trait projections for this position
-                trait_scores = {}
-                for trait_path, (vector, layer) in self.trait_vectors.items():
-                    if layer in activations:
-                        act = activations[layer][0, pos, :]  # [hidden_dim]
-                        score = projection(act, vector, normalize_vector=True).item()
-                        trait_name = trait_path.split('/')[-1]
-                        trait_scores[trait_name] = round(score, 4)
+            # Compute trait projections for this position
+            trait_scores = {}
+            for trait_path, (vector, layer) in self.trait_vectors.items():
+                if layer in activations:
+                    act = activations[layer][0, pos, :]  # [hidden_dim]
+                    score = projection(act, vector, normalize_vector=True).item()
+                    trait_name = trait_path.split('/')[-1]
+                    trait_scores[trait_name] = round(score, 4)
 
-                yield {
-                    'token': token_str,
-                    'trait_scores': trait_scores,
-                    'is_prompt': True,
-                    'done': False
-                }
+            yield {
+                'token': token_str,
+                'trait_scores': trait_scores,
+                'is_prompt': True,
+                'done': False
+            }
 
-            activations.clear()
+        activations.clear()
 
         # Generate tokens
         context = input_ids
         generated_tokens = []
         full_response = ""
+        past_key_values = None  # KV cache
 
         for step in range(max_new_tokens):
             activations.clear()
 
-            # Forward pass with hooks
+            # Forward pass with hooks (use KV cache for speed)
             with HookManager(self.model) as hooks:
                 for layer in layers_needed:
                     hooks.add_forward_hook(f"model.layers.{layer}", make_hook(layer))
 
                 with torch.no_grad():
-                    outputs = self.model(input_ids=context, return_dict=True)
+                    outputs = self.model(
+                        input_ids=context,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                        return_dict=True
+                    )
+
+            # Update KV cache for next iteration
+            past_key_values = outputs.past_key_values
 
             # Sample next token
             logits = outputs.logits[0, -1, :] / temperature
@@ -326,7 +341,8 @@ class ChatInference:
             # Decode token (skip special tokens)
             token_str = self.tokenizer.decode([next_id], skip_special_tokens=True)
             if not token_str:  # Skip if empty after filtering
-                context = torch.cat([context, torch.tensor([[next_id]], device=self.model.device)], dim=1)
+                # Still need to update context to just new token for KV cache
+                context = torch.tensor([[next_id]], device=self.model.device)
                 continue
 
             generated_tokens.append(next_id)
@@ -346,11 +362,12 @@ class ChatInference:
             yield {
                 'token': token_str,
                 'trait_scores': trait_scores,
+                'is_prompt': False,
                 'done': False
             }
 
-            # Update context
-            context = torch.cat([context, torch.tensor([[next_id]], device=self.model.device)], dim=1)
+            # Update context to just new token (KV cache handles history)
+            context = torch.tensor([[next_id]], device=self.model.device)
 
         # Final yield with full response
         yield {
@@ -446,13 +463,14 @@ class ChatInference:
 _chat_instance: Optional[ChatInference] = None
 
 
-def get_chat_instance(experiment: str, backend: str = None) -> ChatInference:
+def get_chat_instance(experiment: str, backend: str = None, model_type: str = "application") -> ChatInference:
     """
     Get or create chat instance for experiment.
 
     Args:
         experiment: Experiment name
         backend: Override backend ("local" or "modal"). If None, uses env var INFERENCE_BACKEND or defaults to "local"
+        model_type: Which model from config to use - "extraction" or "application" (default)
     """
     global _chat_instance
 
@@ -460,8 +478,11 @@ def get_chat_instance(experiment: str, backend: str = None) -> ChatInference:
     if backend is None:
         backend = os.getenv('INFERENCE_BACKEND', 'local')
 
-    # Recreate instance if experiment or backend changed
-    if _chat_instance is None or _chat_instance.experiment != experiment or _chat_instance.backend != backend:
-        _chat_instance = ChatInference(experiment, backend=backend)
+    # Recreate instance if experiment, backend, or model_type changed
+    if (_chat_instance is None or
+        _chat_instance.experiment != experiment or
+        _chat_instance.backend != backend or
+        _chat_instance.model_type != model_type):
+        _chat_instance = ChatInference(experiment, backend=backend, model_type=model_type)
 
     return _chat_instance
