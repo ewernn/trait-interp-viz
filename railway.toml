@@ -1,6 +1,7 @@
+[build]
+builder = "dockerfile"
+
 [deploy]
-# Uses Nixpacks auto-detection (Python + requirements.txt)
-# Start command from Procfile: python visualization/serve.py
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 
