@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
-# Install rclone for R2 sync
-RUN apt-get update && apt-get install -y rclone && rm -rf /var/lib/apt/lists/*
+# Install git (for traitlens from GitHub) and rclone (for R2 sync)
+RUN apt-get update && apt-get install -y git rclone && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
